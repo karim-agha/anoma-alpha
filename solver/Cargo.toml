@@ -7,3 +7,6 @@ rust-version = "1.65"
 [dependencies]
 anoma-network = { path = "../network", default-features = false }
 anoma-primitives = { path = "../primitives", default-features = false }
+
+anyhow = "1.0"
+tokio = { version = "*", features = ["full"] }

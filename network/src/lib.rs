@@ -1,14 +1,29 @@
-pub fn add(left: usize, right: usize) -> usize {
-  left + right
+use {futures::Stream, thiserror::Error};
+
+#[derive(Debug, Error)]
+pub enum NetworkError {}
+
+#[derive(Debug, PartialEq)]
+pub enum NetworkEvent {}
+
+#[derive(Debug, Default)]
+pub struct NetworkConfig {}
+
+pub struct Network {}
+
+impl Network {
+  pub fn new(_config: NetworkConfig) -> Result<Self, NetworkError> {
+    todo!()
+  }
 }
 
-#[cfg(test)]
-mod tests {
-  use super::*;
+impl Stream for Network {
+  type Item = NetworkEvent;
 
-  #[test]
-  fn it_works() {
-    let result = add(2, 2);
-    assert_eq!(result, 4);
+  fn poll_next(
+    self: std::pin::Pin<&mut Self>,
+    _: &mut std::task::Context<'_>,
+  ) -> std::task::Poll<Option<Self::Item>> {
+    todo!()
   }
 }
