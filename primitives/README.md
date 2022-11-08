@@ -1,3 +1,3 @@
-# Anoma Primitie types
+# Anoma shared primitive types
 
 tbd
