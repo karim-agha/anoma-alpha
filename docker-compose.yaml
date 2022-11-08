@@ -1,0 +1,102 @@
+version: '2.1'
+
+networks:
+  anoma_test_net:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.29.1.0/24
+
+# Anoma prototype topology configuration
+#
+# Validator 1 is used as a p2p bootstrap node by all other members of the p2p network
+# and all nodes depend on having validator 1 up an running first to make sure that they
+# are able to join the network.
+
+services:
+
+  # Member of the validator set and p2p bootstrap node
+  validator_1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - RUST_BACKTRACE=1
+    command: ./anoma --secret 9eZ5WeQzr1ntFeocn5ktW6dJcvqQotTfcArzAbmEx1BE --genesis genesis.json
+    networks:
+      anoma_test_net:
+        ipv4_address: 172.29.1.2
+
+  # Member of the validator set with no additional roles
+  validator_2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - RUST_BACKTRACE=1
+    command: ./anoma --secret AGLLBLUGNP8UAeVLDY7zKotjj2tRUnNti4Rk1ecWPwPt --genesis genesis.json --peer 172.29.1.2:44668
+    networks:
+      anoma_test_net:
+    depends_on:
+      validator_1:
+        condition: service_started
+
+  # Member of the validator set with RPC interface enabled and exposed on 8081
+  validator_3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - RUST_BACKTRACE=1
+    command: ./anoma --secret 6FDoqgpd4e2bbjHF6PPkXdPRz4E8tML1E2iV932UWGEb --genesis genesis.json --peer 172.29.1.2:44668 --rpc 8080
+    networks:
+      anoma_test_net:
+    ports:
+      - "8081:8080"
+    depends_on:
+      validator_1:
+        condition: service_started
+
+  # Member of the validator set with RPC interface enabled and exposed on 8082
+  validator_4:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - RUST_BACKTRACE=1
+    command: ./anoma --secret AGophUSF8Kd3cntcJxe7SEeMDUxuBDqhw7ZjRFFsZtua --genesis genesis.json --peer 172.29.1.2:44668 --rpc 8080
+    networks:
+      anoma_test_net:
+    ports:
+      - "8082:8080"
+    depends_on:
+      validator_1:
+        condition: service_started
+
+  # Solver instance that submits complete transactions
+  solver_1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - RUST_BACKTRACE=1
+    command: ./example-solver --secret EL1ZSAYRRNPDgfFmQo9PScrc97sC7BicQMvrMCyE72Je --genesis genesis.json --peer 172.29.1.2:44668
+    networks:
+      anoma_test_net:
+    depends_on:
+      validator_1:
+        condition: service_started
+
+  # Solver instance that submits complete transactions
+  solver_2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - RUST_BACKTRACE=1
+    command: ./example-solver --secret CoD9rnMqBoPjxQnMpDzb53SLYZo2zyYRntEQvg5WopFV --genesis genesis.json --peer 172.29.1.2:44668
+    networks:
+      anoma_test_net:
+    depends_on:
+      validator_1:
+        condition: service_started
