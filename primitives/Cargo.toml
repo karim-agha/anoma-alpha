@@ -5,9 +5,16 @@ edition = "2021"
 rust-version = "1.65"
 
 [dependencies]
+num = "0.4"
 bs58 = "0.4"
-rand = "0.8.5"
+rand = "0.8"
+time = "0.3"
+either = "1.8"
+borsh = "0.9"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "1.0"
 multihash = "0.17"
+curve25519-dalek = "3.2"
 ed25519-dalek = { version = "1", features = [
   "default",
   "serde",
