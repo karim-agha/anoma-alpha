@@ -15,6 +15,11 @@ use {
 /// signature verification for their state mutations will create a new predicate
 /// instance with code = 0xAAA and params = <authorized pubkey>
 ///
+/// Another example are app predicates, so for example a token app account could
+/// have a predicate that validates that the sum of tokens before a transfer
+/// in both accounts is equal to sum of tokens after the transfer and that
+/// sender's signature is attached to the transaction.
+///
 /// Code running as a predicate is not allowed to modify any state on chain, it
 /// has only read access and can returns a boolean value.
 ///
