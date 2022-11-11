@@ -1,5 +1,5 @@
 use {
-  crate::Predicate,
+  crate::PredicateTree,
   ed25519_dalek::{Keypair, SecretKey, Signature, Signer},
   multihash::{Hasher, Multihash, MultihashDigest, Sha3_256},
   num::BigUint,
@@ -11,16 +11,12 @@ use {
 /// transition they want to achieve.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Intent {
-  /// Opaque bytestrings that need to be understood solvers and
-  /// predicates within one app. Solvers use those values as hints
-  /// to find solutions that satisfy predicates.
-  value: Vec<u8>,
-
-  /// A list of predicates that must evaluate to `true` when included
-  /// in a transaction before a state transition is premitted. A transaction
-  /// must satisfy all account and intent predicates before it is allowed to
+  /// A predicate bool expression tree that must evaluate to `true` when
+  /// included in a transaction before a state transition is premitted. A
+  /// transaction must satisfy all predicate trees of accounts that change
+  /// state and the predicate tree of the intent before it is allowed to
   /// mutate sate in accounts.
-  predicates: Vec<Predicate>,
+  predicates: PredicateTree,
 
   /// The total amount of fees the intent producer is willing to pay for
   /// relaying and solving this intent. Actual distribution of fees between
@@ -54,13 +50,11 @@ impl Intent {
   /// This value is used to compute signatures attached to an intent.
   /// This value is computed only once on first call and then cached
   /// for subsequent invocations.
-  pub fn partial_hash(&self) -> &Multihash {
+  fn partial_hash(&self) -> &Multihash {
     self.partial_hash.get_or_init(|| {
       let mut hasher = Sha3_256::default();
-      hasher.update(&bincode::serialize(&self.value).unwrap());
-      hasher.update(&bincode::serialize(&self.value).unwrap());
-      hasher.update(&bincode::serialize(&self.predicates).unwrap());
       hasher.update(&bincode::serialize(&self.fees).unwrap());
+      hasher.update(&bincode::serialize(&self.predicates).unwrap());
       multihash::Code::Sha3_256.wrap(hasher.finalize()).unwrap()
     })
   }
