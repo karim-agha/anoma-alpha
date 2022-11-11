@@ -136,3 +136,9 @@ impl From<PublicKey> for Address {
     Self(*p.as_bytes())
   }
 }
+
+impl From<[u8; 32]> for Address {
+  fn from(value: [u8; 32]) -> Self {
+    Self(value)
+  }
+}
