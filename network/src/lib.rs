@@ -1,4 +1,9 @@
+mod behviour;
+mod codec;
+mod upgrade;
+mod stream;
 pub mod topic;
+mod wire;
 
 pub use topic::Topic;
 use {futures::Stream, thiserror::Error};
@@ -9,7 +14,7 @@ pub enum Error {}
 /// Represents a network level event that is emitted
 /// by the networking module. Events are ordered by their
 /// occurance time and accessed by polling the network stream.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Event {}
 
 /// tbd
