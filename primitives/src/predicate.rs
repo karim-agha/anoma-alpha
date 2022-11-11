@@ -51,13 +51,14 @@ pub struct Predicate {
   /// ```
   /// however any 32-byte value works as an address, and more human-readable
   /// addresses such as `Equals1xxxxxxxxxxxxxxxxxxxx` in base58 are reserved
-  /// for fundamental (builtin) predicates such as Equals, VerifySig, LessThan,
+  /// for fundamental (builtin) that are part of the standard predicates
+  /// library, they include predicates such as Equals, VerifySig, LessThan,
   /// etc.
   code: Address,
 
   /// Parameters to an instance of a predicate for a specific account.
   ///
-  /// That parameters specialize a predicate to the context they are used in,
+  /// Parameters specialize a predicate to the context they are used in,
   /// for example by providing specific public keys for for signature
   /// verification, or providing concrete addresses of price oracles, or any
   /// other bytestrings that are understood by the predicate code.
