@@ -2,7 +2,7 @@
 //! Types in this module implement an asynchronous state machine
 //! for handling inbound and outbound network frames.
 //!
-//! A single connection with a peer may have communicate on many
+//! A single connection with a peer may communicate on many
 //! different libp2p protocols simultaneously. Network packets
 //! are multiplexed with a transport muxer. Here we deal only with
 //! substreams that belong to the HyparView protocol on the same
@@ -142,8 +142,8 @@ impl ConnectionHandler for SubstreamHandler {
       Some(OutboundSubstreamState::AwaitingWrite(substream));
   }
 
-  /// Called by libp2p whenever a message is received over this substream from
-  /// the remote peer.
+  /// Called by libp2p whenever a message is sent over this substream to
+  /// the peer by upper levels of the stack.
   fn inject_event(&mut self, event: Self::InEvent) {
     // store it in the output queue. When users of this
     // object will poll for events they will get it in FIFO order.
