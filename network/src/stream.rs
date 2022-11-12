@@ -16,14 +16,16 @@ use {
   },
   asynchronous_codec::Framed,
   futures::{Sink, StreamExt},
-  libp2p::swarm::{
-    handler::{InboundUpgradeSend, OutboundUpgradeSend},
-    ConnectionHandler,
-    ConnectionHandlerEvent,
-    ConnectionHandlerUpgrErr,
-    KeepAlive,
-    NegotiatedSubstream,
-    SubstreamProtocol,
+  libp2p::{
+    core::{muxing::SubstreamBox, Negotiated},
+    swarm::{
+      ConnectionHandler,
+      ConnectionHandlerEvent,
+      ConnectionHandlerUpgrErr,
+      KeepAlive,
+      NegotiatedSubstream,
+      SubstreamProtocol,
+    },
   },
   std::{
     collections::VecDeque,
@@ -121,7 +123,7 @@ impl ConnectionHandler for SubstreamHandler {
   /// The `substream` objest is an async reader over a muxer.
   fn inject_fully_negotiated_inbound(
     &mut self,
-    substream: <Self::InboundProtocol as InboundUpgradeSend>::Output,
+    substream: Framed<Negotiated<SubstreamBox>, Codec>,
     _: Self::InboundOpenInfo,
   ) {
     // we're ready to start receiving frames from the remote peer over this
@@ -133,7 +135,7 @@ impl ConnectionHandler for SubstreamHandler {
   /// Protocol negotiated successfully with the remote peer for outbound frames.
   fn inject_fully_negotiated_outbound(
     &mut self,
-    substream: <Self::OutboundProtocol as libp2p::swarm::handler::OutboundUpgradeSend>::Output,
+    substream: Framed<Negotiated<SubstreamBox>, Codec>,
     _: Self::OutboundOpenInfo,
   ) {
     // we're ready to start sending frames to the remote peer over this stream.
@@ -154,9 +156,7 @@ impl ConnectionHandler for SubstreamHandler {
   fn inject_dial_upgrade_error(
     &mut self,
     _: Self::OutboundOpenInfo,
-    error: ConnectionHandlerUpgrErr<
-      <Self::OutboundProtocol as OutboundUpgradeSend>::Error,
-    >,
+    error: ConnectionHandlerUpgrErr<upgrade::Error>,
   ) {
     warn!("Dial upgrade error: {error:?}");
     self.inbound_stream = Some(InboundSubstreamState::Poisoned);

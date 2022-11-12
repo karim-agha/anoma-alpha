@@ -15,7 +15,7 @@ pub enum Error {
   #[error("IO Error: {0}")]
   Io(#[from] std::io::Error),
 
-  #[error("Serialization erro: {0}")]
+  #[error("Serialization error: {0}")]
   Serialization(#[from] bincode::Error),
 }
 

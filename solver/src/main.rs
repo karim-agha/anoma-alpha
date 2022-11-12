@@ -30,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
     .await?;
 
   // This topic is used to publish full (solved) transactions
-  // to validators. It also is used to listen on transactions 
+  // to validators. It also is used to listen on transactions
   // published by other solvers to discard intents solved by
   // other solvers from the mempool.
   let _transactions_topic = network
