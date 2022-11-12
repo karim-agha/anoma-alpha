@@ -1,4 +1,5 @@
 mod behviour;
+mod channel;
 mod codec;
 mod stream;
 pub mod topic;
@@ -7,18 +8,21 @@ mod wire;
 
 pub use topic::Topic;
 use {
+  crate::channel::Channel,
   behviour::Behaviour,
-  futures::Stream,
+  futures::{FutureExt, Stream, StreamExt},
   libp2p::{
     core::upgrade::Version,
     dns::TokioDnsConfig,
     identity::Keypair,
-    noise::{self, NoiseConfig, X25519Spec},
+    noise::{self, NoiseConfig, NoiseError, X25519Spec},
+    swarm::SwarmBuilder,
     tcp::{GenTcpConfig, TokioTcpTransport},
     yamux::YamuxConfig,
     Multiaddr,
     Swarm,
     Transport,
+    TransportError,
   },
   std::{
     collections::HashMap,
@@ -26,16 +30,27 @@ use {
     task::{Context, Poll},
   },
   thiserror::Error,
-  tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+  tokio::{
+    sync::mpsc::{UnboundedReceiver, UnboundedSender},
+    task::{JoinError, JoinHandle},
+  },
+  tracing::{error, info},
   wire::AddressablePeer,
 };
-
-pub(crate) type Channel<T> = (UnboundedSender<T>, UnboundedReceiver<T>);
 
 #[derive(Debug, Error)]
 pub enum Error {
   #[error("Topic already joined")]
   TopicAlreadyJoined,
+
+  #[error("IO Error: {0}")]
+  Io(#[from] std::io::Error),
+
+  #[error("Transport layer security error: {0}")]
+  TlsError(#[from] NoiseError),
+
+  #[error("Transport error: {0}")]
+  TransportError(#[from] TransportError<std::io::Error>),
 }
 
 /// Represents a network level event that is emitted
@@ -48,10 +63,15 @@ pub enum Event {
   LocalAddressDiscovered(Multiaddr),
 }
 
+#[derive(Debug, Clone)]
+pub(crate) enum Command {
+  Connect(Multiaddr),
+}
+
 /// Network wide configuration across all topics.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Config {
-  // Maximum size of a message, this applies to
+  /// Maximum size of a message, this applies to
   /// control and payload messages
   pub max_transmit_size: usize,
 
@@ -65,7 +85,7 @@ pub struct Config {
 
   /// Local network addresses this node will listen on for incoming
   /// connections. By default it will listen on all available IPv4 and IPv6
-  /// addresses on port 44661.
+  /// addresses on port 44668.
   pub listen_addrs: Vec<Multiaddr>,
 }
 
@@ -76,8 +96,8 @@ impl Default for Config {
       shuffle_hops_count: 3,
       forward_join_hops_count: 3,
       listen_addrs: vec![
-        "/ip4/0.0.0.0/tcp/44661".parse().unwrap(),
-        "/ip6/::/tcp/44661".parse().unwrap(),
+        "/ip4/0.0.0.0/tcp/44668".parse().unwrap(),
+        "/ip6/::/tcp/44668".parse().unwrap(),
       ],
     }
   }
@@ -102,37 +122,58 @@ pub struct Network {
   /// Each topic is its own instance of HyParView overlay.
   topics: HashMap<String, Topic>,
 
-  /// Libp2p network state driver and event loop
-  swarm: Swarm<Behaviour>,
-
   /// Network-global events.
   events: Channel<Event>,
+
+  /// Network background runloop.
+  ///
+  /// Stored here so users of this type can block on
+  /// the network object.
+  runloop: JoinHandle<()>,
+
+  /// Channel for sending commands to the network thread.
+  cmdtx: UnboundedSender<Command>,
 }
 
 impl Default for Network {
   fn default() -> Self {
     Self::new(Config::default(), Keypair::generate_ed25519())
+      .expect("Failed to instantiate network instance using default config")
   }
 }
 
 impl Network {
-  /// Instanciates a network object with non-default configuration.
-  ///
-  /// We want to strive to minimize the instances where non-default
-  /// network settings are used (outside of unit tests). If you find
-  /// yourself repeatedly setting a config value when instantiating
-  /// the network, consider making it a default value of the config
-  /// object.
-  pub fn new(config: Config, keypair: Keypair) -> Self {
+  /// Instanciates a network object.
+  pub fn new(config: Config, keypair: Keypair) -> Result<Self, Error> {
+    let peer_id = keypair.public().into();
+    let (cmdtx, cmdrx) = Channel::new().split();
+    let runloop = Self::start_network_runloop(&config, keypair, cmdrx)?;
+
+    Ok(Self {
+      cmdtx,
+      runloop,
+      config,
+      topics: HashMap::new(),
+      events: Channel::new(),
+      this: AddressablePeer {
+        peer_id,
+        addresses: vec![], // none discovered yet
+      },
+    })
+  }
+
+  fn start_network_runloop(
+    config: &Config,
+    keypair: Keypair,
+    mut cmdrx: UnboundedReceiver<Command>,
+  ) -> Result<JoinHandle<()>, Error> {
     let transport = {
       let transport = TokioDnsConfig::system(TokioTcpTransport::new(
         GenTcpConfig::new().port_reuse(true).nodelay(true),
-      ))
-      .expect("Failed to create TCP transport layer");
+      ))?;
 
-      let noise_keys = noise::Keypair::<X25519Spec>::new()
-        .into_authentic(&keypair)
-        .expect("Signing libp2p-noise static DH keypair failed.");
+      let noise_keys =
+        noise::Keypair::<X25519Spec>::new().into_authentic(&keypair)?;
 
       transport
         .upgrade(Version::V1)
@@ -141,19 +182,45 @@ impl Network {
         .boxed()
     };
 
-    let swarm =
-      Swarm::new(transport, Behaviour::new(), keypair.public().into());
+    // Libp2p network state driver and event loop
+    let mut swarm = SwarmBuilder::new(
+      transport, //
+      Behaviour::new(config.clone()),
+      keypair.public().into(),
+    )
+    .executor(Box::new(|f| {
+      tokio::spawn(f);
+    }))
+    .build();
 
-    Self {
-      swarm,
-      config,
-      topics: HashMap::new(),
-      events: unbounded_channel(),
-      this: AddressablePeer {
-        peer_id: keypair.public().into(),
-        addresses: vec![], // none discovered yet
-      },
+    // instruct the libp2p engine to accept connections
+    // on all configured addresses and ports.
+    //
+    // The actual sockets will open once we start polling
+    // the swarm on a separate thread.
+    for addr in &config.listen_addrs {
+      swarm.listen_on(addr.clone())?;
     }
+
+    Ok(tokio::spawn(async move {
+      loop {
+        tokio::select! {
+          Some(event) = swarm.next() => {
+            info!("Network event: {event:?}");
+          }
+
+          Some(command) = cmdrx.recv() => {
+            match command {
+              Command::Connect(addr) => {
+                if let Err(e) = swarm.dial(addr) {
+                  error!("dial error: {e:?}");
+                }
+              }
+            }
+          }
+        };
+      }
+    }))
   }
 
   /// Joins a new topic on this network.
@@ -163,7 +230,7 @@ impl Network {
   /// then this node will not dial into any peers but listen on
   /// incoming connections on that topic. It will not receive or
   /// send any values unless at least one other node connects to it.
-  pub async fn join(&mut self, config: topic::Config) -> Result<&Topic, Error> {
+  pub fn join(&mut self, config: topic::Config) -> Result<&Topic, Error> {
     if self.topics.contains_key(&config.name) {
       return Err(Error::TopicAlreadyJoined);
     }
@@ -172,6 +239,13 @@ impl Network {
       .topics
       .insert(config.name.clone(), Topic::new(self.this.clone()));
     Ok(self.topics.get(&config.name).unwrap())
+  }
+
+  pub fn connect(&self, addr: Multiaddr) {
+    self
+      .cmdtx
+      .send(Command::Connect(addr))
+      .expect("command receiver closed");
   }
 }
 
@@ -183,7 +257,17 @@ impl Stream for Network {
     mut self: Pin<&mut Self>,
     cx: &mut Context<'_>,
   ) -> Poll<Option<Self::Item>> {
-    let (_, rx) = &mut self.events;
-    rx.poll_recv(cx)
+    self.events.poll_recv(cx)
+  }
+}
+
+impl std::future::Future for Network {
+  type Output = Result<(), JoinError>;
+
+  fn poll(
+    mut self: Pin<&mut Self>,
+    cx: &mut Context<'_>,
+  ) -> Poll<Self::Output> {
+    self.runloop.poll_unpin(cx)
   }
 }

@@ -1,5 +1,5 @@
 use {
-  crate::{stream::SubstreamHandler, wire::Command, Channel, Event},
+  crate::{stream::SubstreamHandler, wire::Command, Channel, Config, Event},
   libp2p::{
     core::{connection::ConnectionId, transport::ListenerId},
     multiaddr::Protocol,
@@ -11,17 +11,19 @@ use {
     net::{Ipv4Addr, Ipv6Addr},
     task::{Context, Poll},
   },
-  tokio::sync::mpsc::unbounded_channel,
+  tracing::info,
 };
 
 pub struct Behaviour {
+  config: Config,
   events: Channel<Event>,
 }
 
 impl Behaviour {
-  pub(crate) fn new() -> Self {
+  pub(crate) fn new(config: Config) -> Self {
     Self {
-      events: unbounded_channel(),
+      config,
+      events: Channel::new(),
     }
   }
 }
@@ -31,7 +33,7 @@ impl NetworkBehaviour for Behaviour {
   type OutEvent = Event;
 
   fn new_handler(&mut self) -> Self::ConnectionHandler {
-    todo!()
+    SubstreamHandler::new(&self.config)
   }
 
   fn inject_event(
@@ -40,15 +42,15 @@ impl NetworkBehaviour for Behaviour {
     connection: ConnectionId,
     event: Command,
   ) {
-    todo!()
+    info!("injecting event from {peer_id:?} [conn {connection:?}]: {event:?}");
   }
 
   fn inject_new_listen_addr(&mut self, _: ListenerId, addr: &Multiaddr) {
     // it does not make sense to advertise localhost addresses to remote nodes
     if !is_local_address(addr) {
-      let (tx, _) = &self.events;
-      tx.send(Event::LocalAddressDiscovered(addr.clone()))
-        .expect("sender and receiver are owned by this instance");
+      self
+        .events
+        .send(Event::LocalAddressDiscovered(addr.clone()));
     }
   }
 
@@ -57,8 +59,7 @@ impl NetworkBehaviour for Behaviour {
     cx: &mut Context<'_>,
     _: &mut impl PollParameters,
   ) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ConnectionHandler>> {
-    let (_, rx) = &mut self.events;
-    if let Poll::Ready(Some(event)) = rx.poll_recv(cx) {
+    if let Poll::Ready(Some(event)) = self.events.poll_recv(cx) {
       return Poll::Ready(NetworkBehaviourAction::GenerateEvent(event));
     }
     Poll::Pending

@@ -17,6 +17,9 @@ pub struct CliOptions {
 
   #[clap(long, short)]
   genesis: String,
+
+  #[clap(long, short)]
+  rpc: Option<String>,
 }
 
 impl CliOptions {

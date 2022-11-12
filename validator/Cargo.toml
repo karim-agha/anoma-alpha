@@ -13,4 +13,10 @@ anoma-network = { path = "../network", default-features = false }
 anoma-primitives = { path = "../primitives", default-features = false }
 
 anyhow = "1.0"
+futures = "0.3"
+multiaddr = "0.14"
 tokio = { version = "*", features = ["full"] }
+clap = { version = "4.0", features = ["derive"] }
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

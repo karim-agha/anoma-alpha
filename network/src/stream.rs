@@ -10,9 +10,11 @@
 
 use {
   crate::{
+    channel::Channel,
     codec::Codec,
     upgrade::{self, ProtocolUpgrade},
     wire,
+    Config,
   },
   asynchronous_codec::Framed,
   futures::{Sink, StreamExt},
@@ -28,7 +30,6 @@ use {
     },
   },
   std::{
-    collections::VecDeque,
     io,
     pin::Pin,
     task::{Context, Poll},
@@ -92,7 +93,7 @@ pub struct SubstreamHandler {
   keep_alive: KeepAlive,
 
   /// List of messaged scheduled to be writted on this substream.
-  outbound_messages: VecDeque<wire::Command>,
+  outbound_messages: Channel<wire::Command>,
 }
 
 type SubstreamHandlerEvent = ConnectionHandlerEvent<
@@ -101,6 +102,21 @@ type SubstreamHandlerEvent = ConnectionHandlerEvent<
   <SubstreamHandler as ConnectionHandler>::OutEvent,
   <SubstreamHandler as ConnectionHandler>::Error,
 >;
+
+impl SubstreamHandler {
+  pub fn new(config: &Config) -> Self {
+    Self {
+      listen_protocol: SubstreamProtocol::new(
+        ProtocolUpgrade::new(config.max_transmit_size),
+        (),
+      ),
+      inbound_stream: None,
+      outbound_stream: None,
+      keep_alive: KeepAlive::Yes,
+      outbound_messages: Channel::new(),
+    }
+  }
+}
 
 impl ConnectionHandler for SubstreamHandler {
   type Error = upgrade::Error;
@@ -149,7 +165,7 @@ impl ConnectionHandler for SubstreamHandler {
   fn inject_event(&mut self, event: Self::InEvent) {
     // store it in the output queue. When users of this
     // object will poll for events they will get it in FIFO order.
-    self.outbound_messages.push_back(event);
+    self.outbound_messages.send(event);
   }
 
   /// Failed to negotiate protocol upgrade. Invalidate substream.
@@ -276,8 +292,7 @@ impl SubstreamHandler {
         Some(OutboundSubstreamState::Poisoned),
       ) {
         Some(OutboundSubstreamState::AwaitingWrite(substream)) => {
-          if let Some(msg) = self.outbound_messages.pop_front() {
-            self.outbound_messages.shrink_to_fit();
+          if let Poll::Ready(Some(msg)) = self.outbound_messages.poll_recv(cx) {
             self.outbound_stream =
               Some(OutboundSubstreamState::PendingWrite(substream, msg));
           } else {

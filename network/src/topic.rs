@@ -11,7 +11,6 @@ use {
     task::{Context, Poll},
   },
   thiserror::Error,
-  tokio::sync::mpsc::{error::SendError, unbounded_channel},
 };
 
 #[derive(Debug, Error)]
@@ -38,19 +37,14 @@ pub struct Topic {
 
 impl Topic {
   pub(crate) fn new(identity: AddressablePeer) -> Self {
-    let (tx, rx) = unbounded_channel();
     Self {
-      events: (tx, rx),
+      events: Channel::new(),
       identity,
     }
   }
 
-  pub(crate) fn inject_event(
-    &self,
-    event: Event,
-  ) -> Result<(), SendError<Event>> {
-    let (tx, _) = &self.events;
-    tx.send(event)
+  pub(crate) fn inject_event(&self, event: Event) {
+    self.events.send(event);
   }
 }
 
@@ -69,8 +63,7 @@ impl Stream for Topic {
     mut self: Pin<&mut Self>,
     cx: &mut Context<'_>,
   ) -> Poll<Option<Self::Item>> {
-    let (_, rx) = &mut self.events;
-    match rx.poll_recv(cx) {
+    match self.events.poll_recv(cx) {
       Poll::Ready(event) => match event {
         Some(event) => {
           match &event {
