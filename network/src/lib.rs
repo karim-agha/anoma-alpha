@@ -1,6 +1,7 @@
 mod behviour;
 mod channel;
 mod codec;
+mod command;
 mod stream;
 pub mod topic;
 mod upgrade;
@@ -8,7 +9,7 @@ mod wire;
 
 pub use topic::Topic;
 use {
-  crate::channel::Channel,
+  crate::{channel::Channel, command::Command},
   behviour::Behaviour,
   futures::{FutureExt, Stream, StreamExt},
   libp2p::{
@@ -20,7 +21,6 @@ use {
     tcp::{GenTcpConfig, TokioTcpTransport},
     yamux::YamuxConfig,
     Multiaddr,
-    Swarm,
     Transport,
     TransportError,
   },
@@ -61,11 +61,6 @@ pub enum Event {
   /// Emitted when the network discovers new public address pointing to the
   /// current node.
   LocalAddressDiscovered(Multiaddr),
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum Command {
-  Connect(Multiaddr),
 }
 
 /// Network wide configuration across all topics.
@@ -111,6 +106,10 @@ impl Default for Config {
 ///
 /// An instance of this type is used to join topics and acquire
 /// instances of types for interacting with individul topics.
+///
+/// On the implementation level, this type acts as a multiplexer
+/// for topics, routing incoming packets to their appropriate topic
+/// instance.
 pub struct Network {
   /// Global network-level configuration
   config: Config,
@@ -167,6 +166,8 @@ impl Network {
     keypair: Keypair,
     mut cmdrx: UnboundedReceiver<Command>,
   ) -> Result<JoinHandle<()>, Error> {
+    // TCP transport with DNS resolution, NOISE encryption and Yammux
+    // substream multiplexing.
     let transport = {
       let transport = TokioDnsConfig::system(TokioTcpTransport::new(
         GenTcpConfig::new().port_reuse(true).nodelay(true),
@@ -189,7 +190,7 @@ impl Network {
       keypair.public().into(),
     )
     .executor(Box::new(|f| {
-      tokio::spawn(f);
+      tokio::spawn(f); // invoke libp2p tasks on current reactor
     }))
     .build();
 
@@ -210,13 +211,8 @@ impl Network {
           }
 
           Some(command) = cmdrx.recv() => {
-            match command {
-              Command::Connect(addr) => {
-                if let Err(e) = swarm.dial(addr) {
-                  error!("dial error: {e:?}");
-                }
-              }
-            }
+            info!("Invoking network command: {command:?}");
+            command.execute(&mut swarm);
           }
         };
       }
@@ -235,9 +231,10 @@ impl Network {
       return Err(Error::TopicAlreadyJoined);
     }
 
-    self
-      .topics
-      .insert(config.name.clone(), Topic::new(self.this.clone()));
+    self.topics.insert(
+      config.name.clone(),
+      Topic::new(self.this.clone(), self.cmdtx.clone()),
+    );
     Ok(self.topics.get(&config.name).unwrap())
   }
 

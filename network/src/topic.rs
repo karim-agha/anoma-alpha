@@ -3,7 +3,7 @@
 //! 10.1109/DSN.2007.56.
 
 use {
-  crate::{wire::AddressablePeer, Channel},
+  crate::{wire::AddressablePeer, Channel, Command},
   futures::Stream,
   libp2p::{Multiaddr, PeerId},
   std::{
@@ -11,6 +11,7 @@ use {
     task::{Context, Poll},
   },
   thiserror::Error,
+  tokio::sync::mpsc::UnboundedSender,
 };
 
 #[derive(Debug, Error)]
@@ -33,13 +34,18 @@ pub enum Event {
 pub struct Topic {
   identity: AddressablePeer,
   events: Channel<Event>,
+  cmdtx: UnboundedSender<Command>,
 }
 
 impl Topic {
-  pub(crate) fn new(identity: AddressablePeer) -> Self {
+  pub(crate) fn new(
+    identity: AddressablePeer,
+    cmdtx: UnboundedSender<Command>,
+  ) -> Self {
     Self {
       events: Channel::new(),
       identity,
+      cmdtx,
     }
   }
 
