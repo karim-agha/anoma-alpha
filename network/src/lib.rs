@@ -8,19 +8,22 @@ mod upgrade;
 mod wire;
 
 pub use topic::Topic;
+
 use {
   crate::{channel::Channel, command::Command},
   behviour::Behaviour,
   futures::{FutureExt, Stream, StreamExt},
   libp2p::{
+    PeerId, 
     core::upgrade::Version,
     dns::TokioDnsConfig,
     identity::Keypair,
     noise::{self, NoiseConfig, NoiseError, X25519Spec},
-    swarm::SwarmBuilder,
+    swarm::{ConnectionLimits, SwarmBuilder, SwarmEvent},
     tcp::{GenTcpConfig, TokioTcpTransport},
     yamux::YamuxConfig,
     Multiaddr,
+    Swarm,
     Transport,
     TransportError,
   },
@@ -34,7 +37,7 @@ use {
     sync::mpsc::{UnboundedReceiver, UnboundedSender},
     task::{JoinError, JoinHandle},
   },
-  tracing::{error, info},
+  tracing::{error, info, debug},
   wire::AddressablePeer,
 };
 
@@ -56,11 +59,25 @@ pub enum Error {
 /// Represents a network level event that is emitted
 /// by the networking module. Events are ordered by their
 /// occurance time and accessed by polling the network stream.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum Event {
   /// Emitted when the network discovers new public address pointing to the
   /// current node.
   LocalAddressDiscovered(Multiaddr),
+
+  /// Emitted when a connection is created between two peers.
+  /// 
+  /// This is emitted only once regardless of the number of HyParView
+  /// overlays the two peers share. All overlapping overlays share the
+  /// same connection.
+  ConnectionEstablished(AddressablePeer),
+
+  /// Emitted when a connection is closed between two peers.
+  /// 
+  /// This is emitted when the last HyparView overlay between the two
+  /// peers is destroyed and they have no common topics anymore. Also
+  /// emitted when the connection is dropped due to transport layer failure.
+  ConnectionClosed(PeerId)
 }
 
 /// Network wide configuration across all topics.
@@ -161,11 +178,10 @@ impl Network {
     })
   }
 
-  fn start_network_runloop(
+  fn build_swarm(
     config: &Config,
     keypair: Keypair,
-    mut cmdrx: UnboundedReceiver<Command>,
-  ) -> Result<JoinHandle<()>, Error> {
+  ) -> Result<Swarm<Behaviour>, Error> {
     // TCP transport with DNS resolution, NOISE encryption and Yammux
     // substream multiplexing.
     let transport = {
@@ -183,16 +199,32 @@ impl Network {
         .boxed()
     };
 
-    // Libp2p network state driver and event loop
-    let mut swarm = SwarmBuilder::new(
-      transport, //
-      Behaviour::new(config.clone()),
-      keypair.public().into(),
+    Ok(
+      SwarmBuilder::new(
+        transport, //
+        Behaviour::new(config.clone()),
+        keypair.public().into(),
+      )
+      // invoke libp2p tasks on current reactor
+      .executor(Box::new(|f| {
+        tokio::spawn(f); 
+      }))
+      // If multiple topics have overlapping nodes, 
+      // maintain only one connection between peers.
+      .connection_limits(
+        ConnectionLimits::default().with_max_established_per_peer(Some(1)),
+      )
+      .build(),
     )
-    .executor(Box::new(|f| {
-      tokio::spawn(f); // invoke libp2p tasks on current reactor
-    }))
-    .build();
+  }
+
+  fn start_network_runloop(
+    config: &Config,
+    keypair: Keypair,
+    mut cmdrx: UnboundedReceiver<Command>,
+  ) -> Result<JoinHandle<()>, Error> {
+    // Libp2p network state driver and event loop
+    let mut swarm = Self::build_swarm(config, keypair)?;
 
     // instruct the libp2p engine to accept connections
     // on all configured addresses and ports.
@@ -207,7 +239,10 @@ impl Network {
       loop {
         tokio::select! {
           Some(event) = swarm.next() => {
-            info!("Network event: {event:?}");
+            match event {
+              SwarmEvent::Behaviour(event) => info!("Network event: {event:?}"),
+              _ => debug!("{event:?}"),
+            }
           }
 
           Some(command) = cmdrx.recv() => {
@@ -231,11 +266,13 @@ impl Network {
       return Err(Error::TopicAlreadyJoined);
     }
 
+    let name = config.name.clone();
+
     self.topics.insert(
       config.name.clone(),
-      Topic::new(self.this.clone(), self.cmdtx.clone()),
+      Topic::new(config, self.this.clone(), self.cmdtx.clone()),
     );
-    Ok(self.topics.get(&config.name).unwrap())
+    Ok(self.topics.get(&name).unwrap())
   }
 
   pub fn connect(&self, addr: Multiaddr) {

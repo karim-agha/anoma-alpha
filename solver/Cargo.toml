@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.65"
 
+[[bin]]
+name = "solver"
+path = "src/main.rs"
+
 [dependencies]
 anoma-network = { path = "../network", default-features = false }
 anoma-primitives = { path = "../primitives", default-features = false }

@@ -27,6 +27,11 @@ services:
       anoma_test_net:
         ipv4_address: 172.29.1.2
 
+    healthcheck:
+      test: "exit 0"
+      interval: 1s
+      start_period: 3s
+
   # Member of the validator set with no additional roles
   validator_2:
     build:
@@ -39,7 +44,7 @@ services:
       anoma_test_net:
     depends_on:
       validator_1:
-        condition: service_started
+        condition: service_healthy
 
   # Member of the validator set with RPC interface enabled and exposed on 8081
   validator_3:
@@ -55,7 +60,7 @@ services:
       - "8081:8080"
     depends_on:
       validator_1:
-        condition: service_started
+        condition: service_healthy
 
   # Member of the validator set with RPC interface enabled and exposed on 8082
   validator_4:
@@ -71,7 +76,7 @@ services:
       - "8082:8080"
     depends_on:
       validator_1:
-        condition: service_started
+        condition: service_healthy
 
   # Solver instance that submits complete transactions
   solver_1:
@@ -80,12 +85,12 @@ services:
       dockerfile: Dockerfile
     environment:
       - RUST_BACKTRACE=1
-    command: ./example-solver --secret EL1ZSAYRRNPDgfFmQo9PScrc97sC7BicQMvrMCyE72Je --genesis genesis.json --peer 172.29.1.2:44668
+    command: ./solver --secret EL1ZSAYRRNPDgfFmQo9PScrc97sC7BicQMvrMCyE72Je --genesis genesis.json --peer 172.29.1.2:44668
     networks:
       anoma_test_net:
     depends_on:
       validator_1:
-        condition: service_started
+        condition: service_healthy
 
   # Solver instance that submits complete transactions
   solver_2:
@@ -94,9 +99,9 @@ services:
       dockerfile: Dockerfile
     environment:
       - RUST_BACKTRACE=1
-    command: ./example-solver --secret CoD9rnMqBoPjxQnMpDzb53SLYZo2zyYRntEQvg5WopFV --genesis genesis.json --peer 172.29.1.2:44668
+    command: ./solver --secret CoD9rnMqBoPjxQnMpDzb53SLYZo2zyYRntEQvg5WopFV --genesis genesis.json --peer 172.29.1.2:44668
     networks:
       anoma_test_net:
     depends_on:
       validator_1:
-        condition: service_started
+        condition: service_healthy

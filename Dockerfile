@@ -12,7 +12,7 @@ RUN cd /code && make
 FROM rust:1.65-slim-bullseye
 WORKDIR /home
 COPY --from=build-image /code/target/release/anoma .
-COPY --from=build-image /code/target/release/example-solver .
+COPY --from=build-image /code/target/release/solver .
 COPY --from=build-image /code/test/genesis.json .
 
 EXPOSE 44668

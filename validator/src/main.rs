@@ -37,10 +37,6 @@ async fn main() -> anyhow::Result<()> {
     bootstrap: opts.peers(),
   });
 
-  for addr in opts.peers() {
-    network.connect(addr);
-  }
-
   loop {
     while let Some(event) = network.next().await {
       println!("event: {event:?}");

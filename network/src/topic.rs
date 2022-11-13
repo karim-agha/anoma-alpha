@@ -32,6 +32,7 @@ pub enum Event {
 
 /// A topic represents an instance of HyparView p2p overlay.
 pub struct Topic {
+  config: Config,
   identity: AddressablePeer,
   events: Channel<Event>,
   cmdtx: UnboundedSender<Command>,
@@ -39,11 +40,20 @@ pub struct Topic {
 
 impl Topic {
   pub(crate) fn new(
+    config: Config,
     identity: AddressablePeer,
     cmdtx: UnboundedSender<Command>,
   ) -> Self {
+    // dial all bootstrap nodes
+    for addr in config.bootstrap.iter() {
+      cmdtx
+        .send(Command::Connect(addr.clone()))
+        .expect("lifetime of network should be longer than topic");
+    }
+
     Self {
       events: Channel::new(),
+      config,
       identity,
       cmdtx,
     }
