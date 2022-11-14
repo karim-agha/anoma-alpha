@@ -103,4 +103,4 @@ The fact that predicates logic is stored under well-known immutable addresses, a
 
 Here you can see an example of solver that understands a large and complex predicate tree (solver 3). Those types of solvers are most likely very specialized applications, such as poker games, DAOs, etc. The intents tree has subtrees that are also understood by other solvers, such as solver 1 (small subtree, so most likely a simple transfer), or solver 2 (medium sized tree so most likely a swap).
 
-[Intents Predicate tree](predicate-tree.png)
+![Intents Predicate tree](predicate-tree.png)
