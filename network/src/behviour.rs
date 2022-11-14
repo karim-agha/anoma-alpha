@@ -1,7 +1,7 @@
 use {
   crate::{
     stream::SubstreamHandler,
-    wire::{AddressablePeer, Command},
+    wire::{AddressablePeer, Message},
     Channel,
     Config,
     Event,
@@ -9,7 +9,12 @@ use {
   libp2p::{
     core::{connection::ConnectionId, transport::ListenerId, ConnectedPoint},
     multiaddr::Protocol,
-    swarm::{NetworkBehaviour, NetworkBehaviourAction, PollParameters},
+    swarm::{
+      NetworkBehaviour,
+      NetworkBehaviourAction,
+      NotifyHandler,
+      PollParameters,
+    },
     Multiaddr,
     PeerId,
   },
@@ -17,20 +22,26 @@ use {
     net::{Ipv4Addr, Ipv6Addr},
     task::{Context, Poll},
   },
-  tracing::info,
+  tracing::debug,
 };
 
-pub struct Behaviour {
+pub(crate) struct Behaviour {
   config: Config,
   events: Channel<Event>,
+  outmsgs: Channel<(PeerId, Message)>,
 }
 
 impl Behaviour {
-  pub(crate) fn new(config: Config) -> Self {
+  pub fn new(config: Config) -> Self {
     Self {
       config,
       events: Channel::new(),
+      outmsgs: Channel::new(),
     }
+  }
+
+  pub fn send_to(&self, peer: PeerId, msg: Message) {
+    self.outmsgs.send((peer, msg));
   }
 }
 
@@ -46,9 +57,10 @@ impl NetworkBehaviour for Behaviour {
     &mut self,
     peer_id: PeerId,
     connection: ConnectionId,
-    event: Command,
+    event: Message,
   ) {
-    info!("injecting event from {peer_id:?} [conn {connection:?}]: {event:?}");
+    debug!("injecting event from {peer_id:?} [conn {connection:?}]: {event:?}");
+    self.events.send(Event::MessageReceived(peer_id, event));
   }
 
   /// Informs the behaviour about a newly established connection to a peer.
@@ -105,9 +117,21 @@ impl NetworkBehaviour for Behaviour {
     cx: &mut Context<'_>,
     _: &mut impl PollParameters,
   ) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ConnectionHandler>> {
+    // propagate any generated events to the network API.
     if let Poll::Ready(Some(event)) = self.events.poll_recv(cx) {
       return Poll::Ready(NetworkBehaviourAction::GenerateEvent(event));
     }
+
+    // Send next message from outbound queue by forwarding it to the
+    // connection handler associated with the given peer id.
+    if let Poll::Ready(Some((peer, msg))) = self.outmsgs.poll_recv(cx) {
+      return Poll::Ready(NetworkBehaviourAction::NotifyHandler {
+        peer_id: peer,
+        handler: NotifyHandler::Any,
+        event: msg,
+      });
+    }
+
     Poll::Pending
   }
 }

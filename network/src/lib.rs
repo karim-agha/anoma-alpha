@@ -1,16 +1,19 @@
 mod behviour;
 mod channel;
 mod codec;
-mod command;
 mod stream;
 pub mod topic;
 mod upgrade;
 mod wire;
 
+use std::collections::HashMap;
+
 pub use topic::Topic;
+use tracing::warn;
+use wire::Message;
 
 use {
-  crate::{channel::Channel, command::Command},
+  crate::{channel::Channel},
   behviour::Behaviour,
   futures::{FutureExt, Stream, StreamExt},
   libp2p::{
@@ -28,7 +31,6 @@ use {
     TransportError,
   },
   std::{
-    collections::HashMap,
     pin::Pin,
     task::{Context, Poll},
   },
@@ -43,9 +45,6 @@ use {
 
 #[derive(Debug, Error)]
 pub enum Error {
-  #[error("Topic already joined")]
-  TopicAlreadyJoined,
-
   #[error("IO Error: {0}")]
   Io(#[from] std::io::Error),
 
@@ -54,6 +53,9 @@ pub enum Error {
 
   #[error("Transport error: {0}")]
   TransportError(#[from] TransportError<std::io::Error>),
+
+  #[error("Topic {0} already joined")]
+  TopicAlreadyJoined(String)
 }
 
 /// Represents a network level event that is emitted
@@ -77,7 +79,16 @@ pub enum Event {
   /// This is emitted when the last HyparView overlay between the two
   /// peers is destroyed and they have no common topics anymore. Also
   /// emitted when the connection is dropped due to transport layer failure.
-  ConnectionClosed(PeerId)
+  ConnectionClosed(PeerId),
+
+  /// Emitted when a message is received on the wire from a connected peer.
+  MessageReceived(PeerId, Message),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum Command {
+  Connect(Multiaddr),
+  SendMessage { peer: PeerId, msg: Message },
 }
 
 /// Network wide configuration across all topics.
@@ -134,10 +145,6 @@ pub struct Network {
   /// Local identity of the current local node and all its known addresses.
   this: AddressablePeer,
 
-  /// All joined topic addressed by their topic name.
-  /// Each topic is its own instance of HyParView overlay.
-  topics: HashMap<String, Topic>,
-
   /// Network-global events.
   events: Channel<Event>,
 
@@ -146,6 +153,10 @@ pub struct Network {
   /// Stored here so users of this type can block on
   /// the network object.
   runloop: JoinHandle<()>,
+
+  /// All joined topic addressed by their topic name.
+  /// Each topic is its own instance of HyParView overlay.
+  topics: HashMap<String, Topic>,
 
   /// Channel for sending commands to the network thread.
   cmdtx: UnboundedSender<Command>,
@@ -166,18 +177,66 @@ impl Network {
     let runloop = Self::start_network_runloop(&config, keypair, cmdrx)?;
 
     Ok(Self {
-      cmdtx,
-      runloop,
-      config,
       topics: HashMap::new(),
       events: Channel::new(),
       this: AddressablePeer {
         peer_id,
         addresses: vec![], // none discovered yet
       },
+      cmdtx,
+      runloop,
+      config,
     })
   }
 
+  /// Joins a new topic on this network.
+  ///
+  /// The config value specifies mainly the topic name and
+  /// a list of bootstrap peers. If the bootstrap list is empty
+  /// then this node will not dial into any peers but listen on
+  /// incoming connections on that topic. It will not receive or
+  /// send any values unless at least one other node connects to it.
+  pub fn join(&mut self, config: topic::Config) -> Result<&Topic, Error> {
+    if self.topics.contains_key(&config.name) {
+      return Err(Error::TopicAlreadyJoined(config.name));
+    }
+
+    let name = config.name.clone();
+    self.topics.insert(name.clone(), Topic::new(config, self.cmdtx.clone()));
+    Ok(self.topics.get(&name).unwrap())
+  }
+
+  /// Runs the network event loop.
+  /// 
+  /// This loop must be running all the time to drive the network layer,
+  /// this function makes it easy to move the whole network layer to the
+  /// background by calling:
+  /// 
+  /// ```rust
+  /// tokio::spawn(network.runloop());
+  /// ```
+  /// 
+  /// The network object is needed only to join topics, after that all
+  /// interactions with the network happen through the [`Topic`] instances
+  /// created when calling [`Network::join`].
+  pub async fn runloop(mut self) {
+    loop {
+      while let Some(event) = self.next().await {
+        info!("event: {event:?}");
+      }
+    }
+  }
+}
+
+impl Network {
+  fn append_local_address(&mut self, address: Multiaddr) {
+    if !self.this.addresses.contains(&address) {
+      self.this.addresses.push(address);
+    }
+  }
+}
+
+impl Network {
   fn build_swarm(
     config: &Config,
     keypair: Keypair,
@@ -246,40 +305,21 @@ impl Network {
           }
 
           Some(command) = cmdrx.recv() => {
-            info!("Invoking network command: {command:?}");
-            command.execute(&mut swarm);
+            debug!("Invoking network command: {command:?}");
+            match command {
+              Command::Connect(addr) => {
+                if let Err(err) = swarm.dial(addr) {
+                  error!("Failed to dial peer: {err:?}");
+                }
+              }
+              Command::SendMessage { peer, msg } => {
+                swarm.behaviour().send_to(peer, msg);           
+              }
+            }
           }
         };
       }
     }))
-  }
-
-  /// Joins a new topic on this network.
-  ///
-  /// The config value specifies mainly the topic name and
-  /// a list of bootstrap peers. If the bootstrap list is empty
-  /// then this node will not dial into any peers but listen on
-  /// incoming connections on that topic. It will not receive or
-  /// send any values unless at least one other node connects to it.
-  pub fn join(&mut self, config: topic::Config) -> Result<&Topic, Error> {
-    if self.topics.contains_key(&config.name) {
-      return Err(Error::TopicAlreadyJoined);
-    }
-
-    let name = config.name.clone();
-
-    self.topics.insert(
-      config.name.clone(),
-      Topic::new(config, self.this.clone(), self.cmdtx.clone()),
-    );
-    Ok(self.topics.get(&name).unwrap())
-  }
-
-  pub fn connect(&self, addr: Multiaddr) {
-    self
-      .cmdtx
-      .send(Command::Connect(addr))
-      .expect("command receiver closed");
   }
 }
 
@@ -291,7 +331,29 @@ impl Stream for Network {
     mut self: Pin<&mut Self>,
     cx: &mut Context<'_>,
   ) -> Poll<Option<Self::Item>> {
-    self.events.poll_recv(cx)
+    let pollres = self.events.poll_recv(cx);
+
+    if let Poll::Ready(Some(event)) = pollres {
+      info!("network event: {event:?}");
+      match event {
+        Event::LocalAddressDiscovered(addr) => {
+          // always keep track of all known address 
+          // that point to the current node
+          self.append_local_address(addr);
+        }
+        Event::MessageReceived(peer, msg) => { 
+          if let Some(topic) = self.topics.get(&msg.topic) {
+            // forward message to appropriate topic
+            topic.inject_event(topic::Event::MessageReceived(peer, msg));
+          } else {
+            warn!("received message on an unrecognized topic {:?}", msg.topic);
+          }
+        },
+        _ => { }
+      }
+    }
+
+    Poll::Pending
   }
 }
 

@@ -33,7 +33,7 @@ impl Codec {
 
 impl Encoder for Codec {
   type Error = upgrade::Error;
-  type Item = wire::Command;
+  type Item = wire::Message;
 
   fn encode(
     &mut self,
@@ -50,7 +50,7 @@ impl Encoder for Codec {
 
 impl Decoder for Codec {
   type Error = upgrade::Error;
-  type Item = wire::Command;
+  type Item = wire::Message;
 
   fn decode(
     &mut self,

@@ -4,6 +4,7 @@
 //! by Joao Leitao el at.
 
 use {
+  bytes::Bytes,
   libp2p::{Multiaddr, PeerId},
   serde::{Deserialize, Serialize},
 };
@@ -103,11 +104,18 @@ pub struct Disconnect {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Command {
+pub enum Action {
   Join(Join),
   ForwardJoin(ForwardJoin),
   Neighbor(Neighbor),
   Shuffle(Shuffle),
   ShuffleReply(ShuffleReply),
   Disconnect(Disconnect),
+  Gossip(Bytes),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Message {
+  pub topic: String,
+  pub action: Action,
 }

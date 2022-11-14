@@ -3,7 +3,12 @@
 //! 10.1109/DSN.2007.56.
 
 use {
-  crate::{wire::AddressablePeer, Channel, Command},
+  crate::{
+    wire::{Action, AddressablePeer, Message},
+    Channel,
+    Command,
+  },
+  bytes::Bytes,
   futures::Stream,
   libp2p::{Multiaddr, PeerId},
   std::{
@@ -23,8 +28,9 @@ pub struct Config {
   pub bootstrap: Vec<Multiaddr>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum Event {
+  MessageReceived(PeerId, Message),
   LocalAddressDiscovered(Multiaddr),
   ActivePeerConnected(PeerId),
   ActivePeerDisconnected(PeerId),
@@ -33,17 +39,13 @@ pub enum Event {
 /// A topic represents an instance of HyparView p2p overlay.
 pub struct Topic {
   config: Config,
-  identity: AddressablePeer,
   events: Channel<Event>,
   cmdtx: UnboundedSender<Command>,
+  active_peers: Vec<AddressablePeer>,
 }
 
 impl Topic {
-  pub(crate) fn new(
-    config: Config,
-    identity: AddressablePeer,
-    cmdtx: UnboundedSender<Command>,
-  ) -> Self {
+  pub(crate) fn new(config: Config, cmdtx: UnboundedSender<Command>) -> Self {
     // dial all bootstrap nodes
     for addr in config.bootstrap.iter() {
       cmdtx
@@ -52,9 +54,9 @@ impl Topic {
     }
 
     Self {
+      active_peers: vec![],
       events: Channel::new(),
       config,
-      identity,
       cmdtx,
     }
   }
@@ -62,12 +64,19 @@ impl Topic {
   pub(crate) fn inject_event(&self, event: Event) {
     self.events.send(event);
   }
-}
 
-impl Topic {
-  fn append_local_address(&mut self, address: Multiaddr) {
-    if !self.identity.addresses.contains(&address) {
-      self.identity.addresses.push(address);
+  pub fn gossip(&self, data: Bytes) {
+    for peer in &self.active_peers {
+      self
+        .cmdtx
+        .send(Command::SendMessage {
+          peer: peer.peer_id,
+          msg: Message {
+            topic: self.config.name.clone(),
+            action: Action::Gossip(data.clone()),
+          },
+        })
+        .expect("receiver is closed");
     }
   }
 }
@@ -79,21 +88,6 @@ impl Stream for Topic {
     mut self: Pin<&mut Self>,
     cx: &mut Context<'_>,
   ) -> Poll<Option<Self::Item>> {
-    match self.events.poll_recv(cx) {
-      Poll::Ready(event) => match event {
-        Some(event) => {
-          match &event {
-            Event::LocalAddressDiscovered(addr) => {
-              self.append_local_address(addr.clone());
-            }
-            Event::ActivePeerConnected(_) => todo!(),
-            Event::ActivePeerDisconnected(_) => todo!(),
-          };
-          Poll::Ready(Some(event))
-        }
-        None => Poll::Ready(None),
-      },
-      Poll::Pending => Poll::Pending,
-    }
+    self.events.poll_recv(cx)
   }
 }

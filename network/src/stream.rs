@@ -62,7 +62,7 @@ enum OutboundSubstreamState {
   AwaitingWrite(Framed<NegotiatedSubstream, Codec>),
 
   /// Awaiting an async write on the stream to complete.
-  PendingWrite(Framed<NegotiatedSubstream, Codec>, wire::Command),
+  PendingWrite(Framed<NegotiatedSubstream, Codec>, wire::Message),
 
   /// Awaiting an async flush on the stream to complete.
   PendingFlush(Framed<NegotiatedSubstream, Codec>),
@@ -93,7 +93,7 @@ pub struct SubstreamHandler {
   keep_alive: KeepAlive,
 
   /// List of messaged scheduled to be writted on this substream.
-  outbound_messages: Channel<wire::Command>,
+  outbound_messages: Channel<wire::Message>,
 }
 
 type SubstreamHandlerEvent = ConnectionHandlerEvent<
@@ -120,10 +120,10 @@ impl SubstreamHandler {
 
 impl ConnectionHandler for SubstreamHandler {
   type Error = upgrade::Error;
-  type InEvent = wire::Command;
+  type InEvent = wire::Message;
   type InboundOpenInfo = ();
   type InboundProtocol = upgrade::ProtocolUpgrade;
-  type OutEvent = wire::Command;
+  type OutEvent = wire::Message;
   type OutboundOpenInfo = ();
   type OutboundProtocol = upgrade::ProtocolUpgrade;
 

@@ -2,7 +2,6 @@ use {
   crate::cli::CliOptions,
   anoma_network as network,
   clap::Parser,
-  futures::StreamExt,
   network::Network,
   tracing::info,
   tracing_subscriber::FmtSubscriber,
@@ -23,23 +22,25 @@ async fn main() -> anyhow::Result<()> {
   // partial transactions (intents) that could potentially
   // be solved by this instance of the solver and turned into
   // complete transactions.
-  let _intents_topic = network.join(network::topic::Config {
+  let intents_topic = network.join(network::topic::Config {
     name: "/testnet-1/intents".into(),
     bootstrap: opts.peers(),
   })?;
+
+  intents_topic.gossip(vec![1u8, 2, 3].into());
 
   // This topic is used to publish full (solved) transactions
   // to validators. It also is used to listen on transactions
   // published by other solvers to discard intents solved by
   // other solvers from the mempool.
-  let _transactions_topic = network.join(network::topic::Config {
+  let transactions_topic = network.join(network::topic::Config {
     name: "/testnet-1/transactions".into(),
     bootstrap: opts.peers(),
-  });
+  })?;
 
-  loop {
-    while let Some(event) = network.next().await {
-      println!("event: {event:?}");
-    }
-  }
+  transactions_topic.gossip(vec![4u8, 5, 6].into());
+
+  // run the network runloop in the background.
+  tokio::spawn(network.runloop()).await?;
+  Ok(())
 }
