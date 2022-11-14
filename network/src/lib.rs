@@ -6,11 +6,7 @@ pub mod topic;
 mod upgrade;
 mod wire;
 
-use std::collections::HashMap;
-
 pub use topic::Topic;
-use tracing::warn;
-use wire::Message;
 
 use {
   crate::{channel::Channel},
@@ -32,6 +28,7 @@ use {
   },
   std::{
     pin::Pin,
+    collections::HashMap,
     task::{Context, Poll},
   },
   thiserror::Error,
@@ -39,8 +36,8 @@ use {
     sync::mpsc::{UnboundedReceiver, UnboundedSender},
     task::{JoinError, JoinHandle},
   },
-  tracing::{error, info, debug},
-  wire::AddressablePeer,
+  tracing::{error, info, debug, warn},
+  wire::{AddressablePeer, Message},
 };
 
 #[derive(Debug, Error)]

@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
 
   transactions_topic.gossip(vec![4u8, 5, 6].into());
 
-  // run the network runloop in the background.
+  // run the network runloop in the background forever.
   tokio::spawn(network.runloop()).await?;
   Ok(())
 }
