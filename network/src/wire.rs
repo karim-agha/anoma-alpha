@@ -7,6 +7,7 @@ use {
   bytes::Bytes,
   libp2p::{Multiaddr, PeerId},
   serde::{Deserialize, Serialize},
+  std::collections::HashSet,
 };
 
 /// Represents a member of the p2p network
@@ -21,18 +22,31 @@ pub struct AddressablePeer {
   /// to reach this peer. Not all of them will be
   /// accessible from all locations, so the protocol
   /// will try to connecto to any of the addresses listed here.
-  pub addresses: Vec<Multiaddr>,
+  pub addresses: HashSet<Multiaddr>,
+}
+
+impl Eq for AddressablePeer {}
+impl PartialEq for AddressablePeer {
+  fn eq(&self, other: &Self) -> bool {
+    self.peer_id == other.peer_id
+  }
+}
+
+impl std::hash::Hash for AddressablePeer {
+  fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    self.peer_id.hash(state);
+  }
 }
 
 /// Message sent to a bootstrap node to initiate network join
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Join {
   /// Hop counter. Incremented with every hop across nodes.
-  hop: u16,
+  pub hop: u16,
 
   /// Identity and address of the local node that is trying
   /// to join the p2p network.
-  node: AddressablePeer,
+  pub node: AddressablePeer,
 }
 
 /// Message forwarded to active peers of the bootstrap node.
@@ -57,11 +71,11 @@ pub struct ForwardJoin {
 pub struct Neighbor {
   /// Identity and address of the peer that is attempting
   /// to add this local node to its active view.
-  peer: AddressablePeer,
+  pub peer: AddressablePeer,
 
   /// High-priority NEIGHBOR requests are sent iff the sender
   /// has zero peers in their active view.
-  high_priority: bool,
+  pub high_priority: bool,
 }
 
 /// This message is sent periodically by a subset of
@@ -73,13 +87,13 @@ pub struct Neighbor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Shuffle {
   /// Hop counter. Incremented with every network hop.
-  hop: u16,
+  pub hop: u16,
 
   /// Identity and addresses of the node initiating the shuffle.
-  origin: AddressablePeer,
+  pub origin: AddressablePeer,
 
   /// A sample of known peers to the shuffle originator.
-  peers: Vec<AddressablePeer>,
+  pub peers: Vec<AddressablePeer>,
 }
 
 /// Sent as a response to SHUFFLE to the shuffle originator.
@@ -91,7 +105,7 @@ pub struct Shuffle {
 pub struct ShuffleReply {
   /// A sample of known peers to the local node minus all
   /// nodes listed in the SHUFFLE message.
-  peers: Vec<AddressablePeer>,
+  pub peers: Vec<AddressablePeer>,
 }
 
 /// Instructs a peer to end an active connection with the local node.
@@ -100,7 +114,7 @@ pub struct Disconnect {
   /// If the disconnect is graceful (no protocol violation or network error)
   /// then it is simply moved from the active view to the passive view.
   /// Otherwise the peer is removed from both active and passive views.
-  graceful: bool,
+  pub graceful: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

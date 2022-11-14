@@ -6,8 +6,8 @@ mod predicate;
 
 pub use {
   account::Account,
-  predicate::{Predicate, PredicateTree},
   address::Address,
   b58::ToBase58String,
   intent::Intent,
+  predicate::{Predicate, PredicateTree},
 };

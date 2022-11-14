@@ -1,19 +1,17 @@
 mod behviour;
 mod channel;
 mod codec;
+mod config;
 mod stream;
 pub mod topic;
 mod upgrade;
 mod wire;
 
-pub use topic::Topic;
-
 use {
-  crate::{channel::Channel},
+  crate::channel::Channel,
   behviour::Behaviour,
   futures::{FutureExt, Stream, StreamExt},
   libp2p::{
-    PeerId, 
     core::upgrade::Version,
     dns::TokioDnsConfig,
     identity::Keypair,
@@ -22,13 +20,14 @@ use {
     tcp::{GenTcpConfig, TokioTcpTransport},
     yamux::YamuxConfig,
     Multiaddr,
+    PeerId,
     Swarm,
     Transport,
     TransportError,
   },
   std::{
+    collections::{HashMap, HashSet},
     pin::Pin,
-    collections::HashMap,
     task::{Context, Poll},
   },
   thiserror::Error,
@@ -36,9 +35,10 @@ use {
     sync::mpsc::{UnboundedReceiver, UnboundedSender},
     task::{JoinError, JoinHandle},
   },
-  tracing::{error, info, debug, warn},
+  tracing::{debug, error, info, warn},
   wire::{AddressablePeer, Message},
 };
+pub use {config::Config, topic::Topic};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -52,7 +52,7 @@ pub enum Error {
   TransportError(#[from] TransportError<std::io::Error>),
 
   #[error("Topic {0} already joined")]
-  TopicAlreadyJoined(String)
+  TopicAlreadyJoined(String),
 }
 
 /// Represents a network level event that is emitted
@@ -65,14 +65,14 @@ pub enum Event {
   LocalAddressDiscovered(Multiaddr),
 
   /// Emitted when a connection is created between two peers.
-  /// 
+  ///
   /// This is emitted only once regardless of the number of HyParView
   /// overlays the two peers share. All overlapping overlays share the
   /// same connection.
   ConnectionEstablished(AddressablePeer),
 
   /// Emitted when a connection is closed between two peers.
-  /// 
+  ///
   /// This is emitted when the last HyparView overlay between the two
   /// peers is destroyed and they have no common topics anymore. Also
   /// emitted when the connection is dropped due to transport layer failure.
@@ -84,43 +84,26 @@ pub enum Event {
 
 #[derive(Debug, Clone)]
 pub(crate) enum Command {
+  /// Establishes a long-lived TCP connection with a peer.
+  ///
+  /// This happens when a peer is added to the active view
+  /// of one of the topics.
   Connect(Multiaddr),
+
+  /// Bans a peer from connecting to this node.
+  ///
+  /// This happens when a violation of the network protocol
+  /// is detected. Banning a peer will also automatically forcefully
+  /// disconnect it from all topics.
+  ///
+  /// Trying to connect to a peer on an unexpected topic is also
+  /// considered a violation of the protocol and gets the sender
+  /// banned.
+  BanPeer(PeerId),
+
+  /// Sends a message to one peer in the active view of
+  /// one of the topics.
   SendMessage { peer: PeerId, msg: Message },
-}
-
-/// Network wide configuration across all topics.
-#[derive(Debug, Clone)]
-pub struct Config {
-  /// Maximum size of a message, this applies to
-  /// control and payload messages
-  pub max_transmit_size: usize,
-
-  /// The number of hops a shuffle message should
-  /// travel across the network.
-  pub shuffle_hops_count: u16,
-
-  /// The number of hops a FORWARDJOIN message should
-  /// travel across the network.
-  pub forward_join_hops_count: u16,
-
-  /// Local network addresses this node will listen on for incoming
-  /// connections. By default it will listen on all available IPv4 and IPv6
-  /// addresses on port 44668.
-  pub listen_addrs: Vec<Multiaddr>,
-}
-
-impl Default for Config {
-  fn default() -> Self {
-    Self {
-      max_transmit_size: 64 * 1024, // 64KB
-      shuffle_hops_count: 3,
-      forward_join_hops_count: 3,
-      listen_addrs: vec![
-        "/ip4/0.0.0.0/tcp/44668".parse().unwrap(),
-        "/ip6/::/tcp/44668".parse().unwrap(),
-      ],
-    }
-  }
 }
 
 /// This type is the entrypoint to using the network API.
@@ -178,7 +161,7 @@ impl Network {
       events: Channel::new(),
       this: AddressablePeer {
         peer_id,
-        addresses: vec![], // none discovered yet
+        addresses: HashSet::new(), // none discovered yet
       },
       cmdtx,
       runloop,
@@ -199,20 +182,28 @@ impl Network {
     }
 
     let name = config.name.clone();
-    self.topics.insert(name.clone(), Topic::new(config, self.cmdtx.clone()));
+    self.topics.insert(
+      name.clone(),
+      Topic::new(
+        config,
+        self.config.clone(),
+        self.this.clone(),
+        self.cmdtx.clone(),
+      ),
+    );
     Ok(self.topics.get(&name).unwrap())
   }
 
   /// Runs the network event loop.
-  /// 
+  ///
   /// This loop must be running all the time to drive the network layer,
   /// this function makes it easy to move the whole network layer to the
   /// background by calling:
-  /// 
+  ///
   /// ```rust
   /// tokio::spawn(network.runloop());
   /// ```
-  /// 
+  ///
   /// The network object is needed only to join topics, after that all
   /// interactions with the network happen through the [`Topic`] instances
   /// created when calling [`Network::join`].
@@ -227,8 +218,11 @@ impl Network {
 
 impl Network {
   fn append_local_address(&mut self, address: Multiaddr) {
-    if !self.this.addresses.contains(&address) {
-      self.this.addresses.push(address);
+    self.this.addresses.insert(address.clone());
+
+    // update all topics about new local addresses
+    for topic in self.topics.values_mut() {
+      topic.inject_event(topic::Event::LocalAddressDiscovered(address.clone()));
     }
   }
 }
@@ -263,7 +257,7 @@ impl Network {
       )
       // invoke libp2p tasks on current reactor
       .executor(Box::new(|f| {
-        tokio::spawn(f); 
+        tokio::spawn(f);
       }))
       // If multiple topics have overlapping nodes, 
       // maintain only one connection between peers.
@@ -310,7 +304,10 @@ impl Network {
                 }
               }
               Command::SendMessage { peer, msg } => {
-                swarm.behaviour().send_to(peer, msg);           
+                swarm.behaviour().send_to(peer, msg);
+              }
+              Command::BanPeer(peer) => {
+                swarm.ban_peer_id(peer);
               }
             }
           }
@@ -334,19 +331,19 @@ impl Stream for Network {
       info!("network event: {event:?}");
       match event {
         Event::LocalAddressDiscovered(addr) => {
-          // always keep track of all known address 
+          // always keep track of all known address
           // that point to the current node
           self.append_local_address(addr);
         }
-        Event::MessageReceived(peer, msg) => { 
-          if let Some(topic) = self.topics.get(&msg.topic) {
+        Event::MessageReceived(peer, msg) => {
+          if let Some(topic) = self.topics.get_mut(&msg.topic) {
             // forward message to appropriate topic
             topic.inject_event(topic::Event::MessageReceived(peer, msg));
           } else {
             warn!("received message on an unrecognized topic {:?}", msg.topic);
           }
-        },
-        _ => { }
+        }
+        _ => {}
       }
     }
 

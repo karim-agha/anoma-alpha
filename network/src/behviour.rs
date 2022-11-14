@@ -80,7 +80,9 @@ impl NetworkBehaviour for Behaviour {
         .events
         .send(Event::ConnectionEstablished(AddressablePeer {
           peer_id: *peer_id,
-          addresses: vec![endpoint.get_remote_address().clone()],
+          addresses: [endpoint.get_remote_address().clone()]
+            .into_iter()
+            .collect(),
         }));
     }
   }
