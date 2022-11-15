@@ -4,6 +4,8 @@
 
 use {
   crate::{
+    channel::Channel,
+    network::Command,
     wire::{
       Action,
       AddressablePeer,
@@ -15,8 +17,6 @@ use {
       Shuffle,
       ShuffleReply,
     },
-    Channel,
-    Command,
   },
   bytes::Bytes,
   futures::Stream,
@@ -43,8 +43,8 @@ pub struct Config {
 pub enum Event {
   MessageReceived(PeerId, Message),
   LocalAddressDiscovered(Multiaddr),
-  ActivePeerConnected(PeerId),
-  ActivePeerDisconnected(PeerId),
+  ActivePeerConnected(AddressablePeer),
+  ActivePeerDisconnected(AddressablePeer, bool),
 }
 
 /// A topic represents an instance of HyparView p2p overlay.
@@ -89,7 +89,10 @@ impl Topic {
     // dial all bootstrap nodes
     for addr in topic_config.bootstrap.iter() {
       cmdtx
-        .send(Command::Connect(addr.clone()))
+        .send(Command::Connect {
+          addr: addr.clone(),
+          topic: topic_config.name.clone(),
+        })
         .expect("lifetime of network should be longer than topic");
     }
 
@@ -107,6 +110,21 @@ impl Topic {
 
   /// Called when the network layer has a new event for this topic
   pub(crate) fn inject_event(&mut self, event: Event) {
+    match &event {
+      Event::LocalAddressDiscovered(addr) => {
+        self.this_node.addresses.insert(addr.clone());
+      }
+      Event::ActivePeerConnected(peer) => {
+        self.active_peers.insert(peer.clone());
+      }
+      Event::ActivePeerDisconnected(peer, gracefully) => {
+        self.active_peers.remove(peer);
+        if *gracefully {
+          self.passive_peers.insert(peer.clone());
+        }
+      }
+      _ => {}
+    }
     self.events.send(event);
   }
 
@@ -249,6 +267,20 @@ impl Topic {
   }
 }
 
+impl Drop for Topic {
+  fn drop(&mut self) {
+    for peer in self.active_peers.union(&self.pending_peers) {
+      self
+        .cmdtx
+        .send(Command::Disconnect {
+          peer: peer.peer_id,
+          topic: self.topic_config.name.clone(),
+        })
+        .expect("network must outlive topics");
+    }
+  }
+}
+
 impl Stream for Topic {
   type Item = Event;
 
@@ -256,19 +288,6 @@ impl Stream for Topic {
     mut self: Pin<&mut Self>,
     cx: &mut Context<'_>,
   ) -> Poll<Option<Self::Item>> {
-    let pollres = self.events.poll_recv(cx);
-
-    if let Poll::Ready(Some(ref event)) = pollres {
-      match event {
-        Event::MessageReceived(_, _) => todo!(),
-        Event::LocalAddressDiscovered(addr) => {
-          self.this_node.addresses.insert(addr.clone());
-        }
-        Event::ActivePeerConnected(_) => todo!(),
-        Event::ActivePeerDisconnected(_) => todo!(),
-      }
-    }
-
-    pollres
+    self.events.poll_recv(cx)
   }
 }

@@ -1,10 +1,9 @@
 use {
   crate::{
+    channel::Channel,
     stream::SubstreamHandler,
     wire::{AddressablePeer, Message},
-    Channel,
     Config,
-    Event,
   },
   libp2p::{
     core::{connection::ConnectionId, transport::ListenerId, ConnectedPoint},
@@ -24,6 +23,33 @@ use {
   },
   tracing::debug,
 };
+
+/// Represents a behaviour level event that is emitted
+/// by the protocol. Events are ordered by their occurance
+/// time and accessed by polling the network stream.
+#[derive(Debug)]
+pub(crate) enum Event {
+  /// Emitted when the network discovers new public address pointing to the
+  /// current node.
+  LocalAddressDiscovered(Multiaddr),
+
+  /// Emitted when a connection is created between two peers.
+  ///
+  /// This is emitted only once regardless of the number of HyParView
+  /// overlays the two peers share. All overlapping overlays share the
+  /// same connection.
+  ConnectionEstablished(AddressablePeer),
+
+  /// Emitted when a connection is closed between two peers.
+  ///
+  /// This is emitted when the last HyparView overlay between the two
+  /// peers is destroyed and they have no common topics anymore. Also
+  /// emitted when the connection is dropped due to transport layer failure.
+  ConnectionClosed(PeerId),
+
+  /// Emitted when a message is received on the wire from a connected peer.
+  MessageReceived(PeerId, Message),
+}
 
 pub(crate) struct Behaviour {
   config: Config,
@@ -67,9 +93,9 @@ impl NetworkBehaviour for Behaviour {
   fn inject_connection_established(
     &mut self,
     peer_id: &PeerId,
-    _connection_id: &ConnectionId,
+    _: &ConnectionId,
     endpoint: &ConnectedPoint,
-    _failed_addresses: Option<&Vec<Multiaddr>>,
+    _: Option<&Vec<Multiaddr>>,
     other_established: usize,
   ) {
     // signal only if it is the first connection to this peer,

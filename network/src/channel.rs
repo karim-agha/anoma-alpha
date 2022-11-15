@@ -32,6 +32,10 @@ impl<T: Send + Sync + Debug> Channel<T> {
     self.rx.poll_recv(cx)
   }
 
+  pub fn sender(&self) -> UnboundedSender<T> {
+    self.tx.clone()
+  }
+
   pub fn split(self) -> (UnboundedSender<T>, UnboundedReceiver<T>) {
     (self.tx, self.rx)
   }
