@@ -27,7 +27,7 @@ use {
 /// Represents a behaviour level event that is emitted
 /// by the protocol. Events are ordered by their occurance
 /// time and accessed by polling the network stream.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum Event {
   /// Emitted when the network discovers new public address pointing to the
   /// current node.

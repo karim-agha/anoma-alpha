@@ -1,15 +1,12 @@
-use tracing::info;
-
 use {
   crate::{
-    behaviour,
     behaviour::Behaviour,
     channel::Channel,
     network::{self, Error},
     wire::Message,
     Config,
   },
-  futures::{FutureExt, StreamExt},
+  futures::StreamExt,
   libp2p::{
     core::upgrade::Version,
     dns::TokioDnsConfig,
@@ -23,12 +20,11 @@ use {
     Swarm,
     Transport,
   },
-  std::future::Future,
   tokio::{
     sync::mpsc::{UnboundedReceiver, UnboundedSender},
-    task::{JoinError, JoinHandle},
+    task::JoinHandle,
   },
-  tracing::{debug, error, warn},
+  tracing::{error, info, warn},
 };
 
 /// Low-level network commands.
@@ -73,7 +69,6 @@ pub enum Command {
 /// Manages the event loop that drives the network layer.
 pub(crate) struct Runloop {
   cmdtx: UnboundedSender<Command>,
-  handle: JoinHandle<()>,
 }
 
 impl Runloop {
@@ -83,25 +78,12 @@ impl Runloop {
     netcmdtx: UnboundedSender<network::Command>,
   ) -> Result<Self, Error> {
     let (tx, rx) = Channel::new().split();
-    Ok(Self {
-      cmdtx: tx,
-      handle: start_network_runloop(config, keypair, rx, netcmdtx)?,
-    })
+    start_network_runloop(config, keypair, rx, netcmdtx)?;
+    Ok(Self { cmdtx: tx })
   }
 
   pub fn send_command(&self, command: Command) {
     self.cmdtx.send(command).expect("runloop thread died");
-  }
-}
-
-impl Future for Runloop {
-  type Output = Result<(), JoinError>;
-
-  fn poll(
-    mut self: std::pin::Pin<&mut Self>,
-    cx: &mut std::task::Context<'_>,
-  ) -> std::task::Poll<Self::Output> {
-    self.handle.poll_unpin(cx)
   }
 }
 
@@ -168,19 +150,18 @@ fn start_network_runloop(
     loop {
       tokio::select! {
         Some(event) = swarm.next() => {
-          match event {
-            SwarmEvent::Behaviour(event) => match event {
-              behaviour::Event::MessageReceived(from, msg) =>
-                netcmdtx.send(network::Command::AcceptMessage { from, msg })
-                  .expect("network should outlive runloop"),
-              _ => info!("{event:?}"),
-            },
-            _ => debug!("{event:?}"),
+          if let SwarmEvent::Behaviour(event) = event {
+            // forward all events to the [`Network`] object and
+            // handle it there. This loop is not responsible for
+            // any high-level logic except routing commands and
+            // events between network foreground and background
+            // threads.
+            netcmdtx.send(network::Command::InjectEvent(event))
+              .expect("network should outlive runloop");
           }
         }
 
         Some(command) = cmdrx.recv() => {
-          debug!("Invoking network command: {command:?}");
           match command {
             Command::Connect(addr) => {
               if let Err(err) = swarm.dial(addr) {
