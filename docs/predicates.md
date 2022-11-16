@@ -27,7 +27,7 @@ The predicate WASM bytecode MUST export one function:
 fn validate(context: Vec<u8>, tx: Transaction) -> bool;
 ```
 
-and lives under a known address. It is invoked by the chain whenever something tries to modify some account state. For example, if we want to make some predicate's bytecode immutable after it is uploaded, then it's predicate tree would contain exactly one predicate that always returns `false`. Predicates are allowed to all contents of any account referenced by the transaction.
+and lives under a known address. It is invoked by the chain whenever something tries to modify some account state. For example, if we want to make some predicate's bytecode immutable after it is uploaded, then it's predicate tree would contain exactly one predicate that always returns `false`. Predicates are allowed to read all contents of any account referenced by the transaction.
 
 The basic structure of a [`Predicate`](../primitives/src/predicate.rs) is:
 
