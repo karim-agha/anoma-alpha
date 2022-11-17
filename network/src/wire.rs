@@ -32,6 +32,15 @@ impl PartialEq for AddressablePeer {
   }
 }
 
+impl From<PeerId> for AddressablePeer {
+  fn from(value: PeerId) -> Self {
+    AddressablePeer {
+      peer_id: value,
+      addresses: [].into_iter().collect(),
+    }
+  }
+}
+
 impl std::hash::Hash for AddressablePeer {
   fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
     self.peer_id.hash(state);
@@ -41,9 +50,6 @@ impl std::hash::Hash for AddressablePeer {
 /// Message sent to a bootstrap node to initiate network join
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Join {
-  /// Hop counter. Incremented with every hop across nodes.
-  pub hop: u16,
-
   /// Identity and address of the local node that is trying
   /// to join the p2p network.
   pub node: AddressablePeer,
@@ -125,7 +131,7 @@ pub enum Action {
   Shuffle(Shuffle),
   ShuffleReply(ShuffleReply),
   Disconnect(Disconnect),
-  Gossip(Bytes),
+  Gossip(u128, Bytes),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

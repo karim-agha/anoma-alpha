@@ -2,6 +2,7 @@ use {
   crate::cli::CliOptions,
   anoma_network as network,
   clap::Parser,
+  futures::StreamExt,
   network::Network,
   std::time::Duration,
   tracing::info,
@@ -30,6 +31,13 @@ async fn main() -> anyhow::Result<()> {
 
   intents_topic.gossip(vec![1u8, 2, 3].into());
 
+  tokio::spawn(async move {
+    let mut intents_topic = intents_topic;
+    while let Some(e) = intents_topic.next().await {
+      info!("intents: {e:?}");
+    }
+  });
+
   // This topic is used to publish full (solved) transactions
   // to validators. It also is used to listen on transactions
   // published by other solvers to discard intents solved by
@@ -40,6 +48,13 @@ async fn main() -> anyhow::Result<()> {
   })?;
 
   transactions_topic.gossip(vec![4u8, 5, 6].into());
+
+  tokio::spawn(async move {
+    let mut transactions_topic = transactions_topic;
+    while let Some(e) = transactions_topic.next().await {
+      info!("transactions: {e:?}");
+    }
+  });
 
   // run the network runloop in the background.
   tokio::spawn(network.runloop());

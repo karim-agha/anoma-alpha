@@ -38,7 +38,13 @@ pub(crate) enum Event {
   /// This is emitted only once regardless of the number of HyParView
   /// overlays the two peers share. All overlapping overlays share the
   /// same connection.
-  ConnectionEstablished(AddressablePeer),
+  ConnectionEstablished {
+    /// True if this node initiated the connection, otherwise false.
+    dialer: bool,
+
+    /// Address and identity of the remote peer.
+    peer: AddressablePeer,
+  },
 
   /// Emitted when a connection is closed between two peers.
   ///
@@ -102,14 +108,15 @@ impl NetworkBehaviour for Behaviour {
     // otherwise it will be immediately closed by libp2p as it
     // will exceed the maximum allowed connections between peers (1).s
     if other_established == 0 {
-      self
-        .events
-        .send(Event::ConnectionEstablished(AddressablePeer {
+      self.events.send(Event::ConnectionEstablished {
+        dialer: matches!(endpoint, ConnectedPoint::Dialer { .. }),
+        peer: AddressablePeer {
           peer_id: *peer_id,
           addresses: [endpoint.get_remote_address().clone()]
             .into_iter()
             .collect(),
-        }));
+        },
+      });
     }
   }
 
