@@ -21,6 +21,7 @@ use {
   bytes::Bytes,
   futures::Stream,
   libp2p::{Multiaddr, PeerId},
+  metrics::{gauge, increment_counter},
   parking_lot::RwLock,
   rand::seq::IteratorRandom,
   std::{
@@ -118,8 +119,9 @@ impl Topic {
         .send(Command::SendMessage {
           peer: *peer,
           msg: Message {
+            id,
             topic: inner.topic_config.name.clone(),
-            action: Action::Gossip(id, data.clone()),
+            action: Action::Gossip(data.clone()),
           },
         })
         .expect("receiver is closed");
@@ -194,7 +196,7 @@ impl TopicInner {
       Action::Shuffle(s) => self.consume_shuffle(sender, s),
       Action::ShuffleReply(sr) => self.consume_shuffle_reply(sender, sr),
       Action::Disconnect(d) => self.consume_disconnect(sender, d),
-      Action::Gossip(id, b) => self.consume_gossip(sender, id, b),
+      Action::Gossip(b) => self.consume_gossip(sender, b),
     }
   }
 
@@ -212,6 +214,7 @@ impl TopicInner {
             .send(Command::SendMessage {
               peer: peer.peer_id,
               msg: Message {
+                id: rand::random(),
                 topic: self.topic_config.name.clone(),
                 action: Action::Join(Join {
                   node: self.this_node.clone(),
@@ -306,6 +309,11 @@ impl TopicInner {
   /// they will move a random node from the active view to their passive view
   /// and establish an active connection with the initiator.
   fn consume_join(&mut self, sender: PeerId, msg: Join) {
+    increment_counter!(
+      "received_join",
+      "topic" => self.topic_config.name.clone()
+    );
+
     info!(
       "join request on topic {} from {sender}",
       self.topic_config.name
@@ -325,6 +333,12 @@ impl TopicInner {
   /// Nodes on the last hop MUST establish an active view with the initiator,
   /// even if they have to move one of their active connections to passive mode.
   fn consume_forward_join(&mut self, sender: PeerId, msg: ForwardJoin) {
+    increment_counter!(
+      "received_forward_join",
+      "topic" => self.topic_config.name.clone(),
+      "hop" => msg.hop.to_string()
+    );
+
     todo!()
   }
 
@@ -337,6 +351,11 @@ impl TopicInner {
   /// This message is also sent to nodes that are being moved from passive view
   /// to the active view.
   fn consume_neighbor(&mut self, sender: PeerId, msg: Neighbor) {
+    increment_counter!(
+      "received_neighbor",
+      "topic" => self.topic_config.name.clone()
+    );
+
     todo!()
   }
 
@@ -346,6 +365,11 @@ impl TopicInner {
   /// them from their active view. Which also means that the sender should
   /// also be removed from the receiving node's active view.
   fn consume_disconnect(&mut self, sender: PeerId, msg: Disconnect) {
+    increment_counter!(
+      "received_disconnect",
+      "topic" => self.topic_config.name.clone()
+    );
+
     todo!()
   }
 
@@ -366,6 +390,12 @@ impl TopicInner {
   /// with a sample of its own active and passive nodes that were not present
   /// in the SHUFFLE message.
   fn consume_shuffle(&mut self, sender: PeerId, msg: Shuffle) {
+    increment_counter!(
+      "received_shuffle",
+      "topic" => self.topic_config.name.clone(),
+      "peers_count" => msg.peers.len().to_string()
+    );
+
     todo!()
   }
 
@@ -376,6 +406,12 @@ impl TopicInner {
   /// of local node's known active and passive peers that were not present in
   /// the received SHUFFLE message.
   fn consume_shuffle_reply(&mut self, sender: PeerId, msg: ShuffleReply) {
+    increment_counter!(
+      "received_shuffle_reply",
+      "topic" => self.topic_config.name.clone(),
+      "peers_count" => msg.peers.len().to_string()
+    );
+
     todo!()
   }
 
@@ -384,7 +420,10 @@ impl TopicInner {
   /// Those messages are emitted to listeners on this topic events.
   /// The message id is a randomly generated identifier by the originating
   /// node and is used to ignore duplicate messages.
-  fn consume_gossip(&mut self, sender: PeerId, id: u128, msg: Bytes) {
+  fn consume_gossip(&mut self, sender: PeerId, msg: Bytes) {
+    gauge!(
+      "gossip_size", msg.len() as f64,
+      "topic" => self.topic_config.name.clone());
     self.outmsgs.send(msg);
   }
 }

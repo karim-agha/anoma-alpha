@@ -15,4 +15,4 @@ COPY --from=build-image /code/target/release/anoma .
 COPY --from=build-image /code/target/release/solver .
 COPY --from=build-image /code/test/genesis.json .
 
-EXPOSE 44668
+EXPOSE 44668 9000

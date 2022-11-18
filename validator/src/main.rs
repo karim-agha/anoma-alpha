@@ -3,6 +3,7 @@ use {
   anoma_network as network,
   clap::Parser,
   futures::StreamExt,
+  metrics_exporter_prometheus::PrometheusBuilder,
   network::Network,
   tracing::info,
   tracing_subscriber::FmtSubscriber,
@@ -13,6 +14,9 @@ mod cli;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
   tracing::subscriber::set_global_default(FmtSubscriber::new())?;
+  PrometheusBuilder::new()
+    .install()
+    .expect("failed to install metrics exporter");
 
   let opts = CliOptions::parse();
   info!("Validator options: {opts:?}");

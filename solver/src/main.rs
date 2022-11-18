@@ -3,6 +3,7 @@ use {
   anoma_network as network,
   clap::Parser,
   futures::StreamExt,
+  metrics_exporter_prometheus::PrometheusBuilder,
   network::Network,
   std::time::Duration,
   tracing::info,
@@ -14,6 +15,9 @@ mod cli;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
   tracing::subscriber::set_global_default(FmtSubscriber::new())?;
+  PrometheusBuilder::new()
+    .install()
+    .expect("failed to install metrics exporter");
 
   let opts = CliOptions::parse();
   info!("Solver options: {opts:?}");
@@ -29,7 +33,16 @@ async fn main() -> anyhow::Result<()> {
     bootstrap: opts.peers(),
   })?;
 
-  intents_topic.gossip(vec![1u8, 2, 3].into());
+  tokio::spawn({
+    let intents = intents_topic.clone();
+
+    async move {
+      loop {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        intents.gossip(vec![1u8, 2, 3].into())
+      }
+    }
+  });
 
   tokio::spawn(async move {
     let mut intents_topic = intents_topic;

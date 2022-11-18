@@ -1,0 +1,6 @@
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: Nc-Z-Nd4k
+    url: http://172.29.1.3:9090

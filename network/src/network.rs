@@ -15,6 +15,7 @@ use {
     PeerId,
     TransportError,
   },
+  metrics::{gauge, increment_counter},
   std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     pin::Pin,
@@ -22,7 +23,7 @@ use {
     time::Instant,
   },
   thiserror::Error,
-  tracing::{debug, error, info},
+  tracing::{debug, error},
 };
 
 #[derive(Debug, Error)]
@@ -146,6 +147,12 @@ impl Network {
         self.commands.sender(),
       ),
     );
+
+    gauge!(
+      "topics_joined",
+      self.connections.open_connections_count() as f64
+    );
+
     Ok(self.topics.get(&name).unwrap().clone())
   }
 
@@ -224,6 +231,17 @@ impl Network {
     } else {
       self.connections.add_pending_connection(peer);
     }
+
+    // metrics & observability
+    gauge!(
+      "connected_peers",
+      self.connections.open_connections_count() as f64
+    );
+
+    gauge!(
+      "pending_peers",
+      self.connections.pending_connections_count() as f64
+    );
   }
 
   fn begin_disconnect(&mut self, peer: PeerId, topic: String) {
@@ -297,6 +315,17 @@ impl Network {
           .inject_event(Event::PeerDisconnected(peer, false));
       }
     }
+
+    // metrics & observability
+    gauge!(
+      "connected_peers",
+      self.connections.open_connections_count() as f64
+    );
+
+    gauge!(
+      "pending_peers",
+      self.connections.pending_connections_count() as f64
+    );
   }
 
   fn append_local_address(&mut self, address: Multiaddr) {
@@ -309,6 +338,11 @@ impl Network {
   }
 
   fn accept_message(&mut self, from: PeerId, msg: Message) {
+    increment_counter!(
+      "messages_received",
+      "peer" => from.to_base58(),
+      "topic" => msg.topic.clone()
+    );
     if let Some(topic) = self.topics.get_mut(&msg.topic) {
       // If this is the first message from a peer that dialed us,
       // on this topic, then signal that it has connected to the
@@ -342,15 +376,29 @@ impl Network {
     debug!("network event: {event:?}");
     match event {
       behaviour::Event::MessageReceived(from, msg) => {
+        increment_counter!(
+          "received_messages",
+          "peer" => from.to_base58(),
+          "topic" => msg.topic.clone()
+        );
         self.accept_message(from, msg)
       }
       behaviour::Event::LocalAddressDiscovered(addr) => {
+        increment_counter!("local_address_discovered");
         self.append_local_address(addr)
       }
       behaviour::Event::ConnectionEstablished { peer, dialer } => {
+        increment_counter!(
+          "connections_established", 
+          "peer" => peer.peer_id.to_base58(), 
+          "dialer" => dialer.to_string());
         self.complete_connect(peer, dialer)
       }
       behaviour::Event::ConnectionClosed(peer) => {
+        increment_counter!(
+          "connections_closed",
+          "peer" => peer.to_base58()
+        );
         self.complete_disconnect(peer);
       }
     }
@@ -455,6 +503,14 @@ impl ConnectionTracker {
       .get(&peer)
       .map(|topics| topics.contains(topic))
       .unwrap_or(false)
+  }
+
+  fn open_connections_count(&self) -> usize {
+    self.connections.len()
+  }
+
+  fn pending_connections_count(&self) -> usize {
+    self.pending_connections.len()
   }
 
   fn add_pending_dial(&mut self, addr: Multiaddr, topic: String) {

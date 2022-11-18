@@ -51,6 +51,8 @@ $ docker-compose up --build
 
 This command will configure and run the topology described in the above diagram and expose two RPC HTTP interfaces on ports `8081` and `8082` and a blockchain explorer on port `8083`.
 
+To monitor various metrics recorded by telemetry navigate your browser to http://localhost:10000.
+
 ## Nodes
 
 ### Solver

@@ -20,6 +20,7 @@ use {
     Swarm,
     Transport,
   },
+  metrics::increment_counter,
   tokio::{
     sync::mpsc::{UnboundedReceiver, UnboundedSender},
     task::JoinHandle,
@@ -165,6 +166,7 @@ fn start_network_runloop(
           match command {
             Command::Connect(addr) => {
               if let Err(err) = swarm.dial(addr) {
+                increment_counter!("dial_errors");
                 error!("Failed to dial peer: {err:?}");
               }
             }
@@ -174,9 +176,18 @@ fn start_network_runloop(
               }
             }
             Command::SendMessage { peer, msg } => {
+              increment_counter!(
+                "messages_sent",
+                "peer" => peer.to_string(),
+                "topic" => msg.topic.clone()
+              );
               swarm.behaviour().send_to(peer, msg);
             }
             Command::BanPeer(peer) => {
+              increment_counter!(
+                "banned_peers",
+                "peer" => peer.to_base58()
+              );
               swarm.ban_peer_id(peer);
             }
           }

@@ -64,11 +64,11 @@ pub struct Join {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForwardJoin {
   /// Hop counter. Incremented with every network hop.
-  hop: u16,
+  pub hop: u16,
 
   /// Identity and address of the local node that is trying
   /// to join the p2p network.
-  node: AddressablePeer,
+  pub node: AddressablePeer,
 }
 
 /// Sent as a response to JOIN, FORWARDJOIN to the initating node,
@@ -131,11 +131,12 @@ pub enum Action {
   Shuffle(Shuffle),
   ShuffleReply(ShuffleReply),
   Disconnect(Disconnect),
-  Gossip(u128, Bytes),
+  Gossip(Bytes),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
+  pub id: u128,
   pub topic: String,
   pub action: Action,
 }
