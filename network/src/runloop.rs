@@ -24,7 +24,7 @@ use {
     sync::mpsc::{UnboundedReceiver, UnboundedSender},
     task::JoinHandle,
   },
-  tracing::{error, info, warn},
+  tracing::{error, warn},
 };
 
 /// Low-level network commands.
