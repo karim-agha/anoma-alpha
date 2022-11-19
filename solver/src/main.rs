@@ -39,7 +39,8 @@ async fn main() -> anyhow::Result<()> {
     async move {
       loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
-        intents.gossip(vec![1u8, 2, 3].into())
+        let bytes = [1u8, 2, 3]; // test deduplication
+        intents.gossip(bytes.to_vec().into());
       }
     }
   });
@@ -60,7 +61,17 @@ async fn main() -> anyhow::Result<()> {
     bootstrap: opts.peers(),
   })?;
 
-  transactions_topic.gossip(vec![4u8, 5, 6].into());
+  tokio::spawn({
+    let transactions = transactions_topic.clone();
+
+    async move {
+      loop {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let bytes: [u8; 10] = rand::random(); // no duplicates
+        transactions.gossip(bytes.to_vec().into());
+      }
+    }
+  });
 
   tokio::spawn(async move {
     let mut transactions_topic = transactions_topic;
@@ -70,9 +81,6 @@ async fn main() -> anyhow::Result<()> {
   });
 
   // run the network runloop in the background.
-  tokio::spawn(network.runloop());
-
-  // kill process after 60 seconds.
-  tokio::time::sleep(Duration::from_secs(60)).await;
+  tokio::spawn(network.runloop()).await?;
   Ok(())
 }

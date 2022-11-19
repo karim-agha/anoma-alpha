@@ -24,7 +24,7 @@ use {
     time::Instant,
   },
   thiserror::Error,
-  tracing::{debug, error, info, warn},
+  tracing::{debug, error, info},
 };
 
 #[derive(Debug, Error)]
@@ -268,38 +268,30 @@ impl Network {
   }
 
   fn begin_disconnect(&mut self, peer: PeerId, topic: String) {
-    let refcount = self
-      .connections
-      .remove_connection(peer, &topic)
-      .unwrap_or_else(|| {
-        panic!(
-          "Bug in connection tracker. Topic {topic} is trying to disconnect \
-           from an untracked peer {peer:?}"
-        );
-      });
+    if let Some(refcount) = self.connections.remove_connection(peer, &topic) {
+      if refcount == 0 {
+        // this was the last topic that disconnected from this peer, close the
+        // connection and on successfull close of the link signal that to the
+        // topic.
+        self.connections.add_pending_disconnect(peer, topic);
+        self
+          .runloop
+          .send_command(runloop::Command::Disconnect(peer))
+      } else {
+        // other topics are still connected to this peer, in that case
+        // the link between peers will not be closed, instead we just
+        // signal to the topic that its disconnected and decrement the
+        // refcount.
 
-    if refcount == 0 {
-      // this was the last topic that disconnected from this peer, close the
-      // connection and on successfull close of the link signal that to the
-      // topic.
-      self.connections.add_pending_disconnect(peer, topic);
-      self
-        .runloop
-        .send_command(runloop::Command::Disconnect(peer))
-    } else {
-      // other topics are still connected to this peer, in that case
-      // the link between peers will not be closed, instead we just
-      // signal to the topic that its disconnected and decrement the
-      // refcount.
+        let topic = self.topics.get_mut(&topic).unwrap_or_else(|| {
+          panic!(
+            "Bug in topic tracker. Attempting to disconnect peer {peer} from \
+             an unknown topic {topic}"
+          );
+        });
 
-      let topic = self.topics.get_mut(&topic).unwrap_or_else(|| {
-        panic!(
-          "Bug in topic tracker. Attempting to disconnect peer {peer} from an \
-           unknown topic {topic}"
-        );
-      });
-
-      topic.inject_event(Event::PeerDisconnected(peer, true));
+        topic.inject_event(Event::PeerDisconnected(peer, true));
+      }
     }
   }
 
@@ -389,15 +381,6 @@ impl Network {
         .try_move_pending_connection(from, &msg.topic)
       {
         topic.inject_event(topic::Event::PeerConnected(peer));
-      }
-
-      if !self.connections.connected_to(from, &msg.topic) {
-        topic.inject_event(topic::Event::PeerConnected(
-          self
-            .connections
-            .get_peer_by_id(from)
-            .expect("already checked if connected"),
-        ));
       }
 
       // route message to appropriate topic
@@ -535,14 +518,6 @@ impl ConnectionTracker {
     false
   }
 
-  fn connected_to(&self, peer: PeerId, topic: &str) -> bool {
-    self
-      .connections
-      .get(&peer)
-      .map(|topics| topics.contains(topic))
-      .unwrap_or(false)
-  }
-
   fn open_connections_count(&self) -> usize {
     self.connections.len()
   }
@@ -597,13 +572,6 @@ impl ConnectionTracker {
   /// disconnecting from the peer TCP link.
   fn add_pending_disconnect(&mut self, peer: PeerId, topic: String) {
     self.pending_disconnects.insert(peer, topic);
-  }
-
-  fn get_peer_by_id(&self, id: PeerId) -> Option<AddressablePeer> {
-    self.ids.get(&id).map(|addrs| AddressablePeer {
-      peer_id: id,
-      addresses: addrs.clone(),
-    })
   }
 
   fn get_peer_by_addr(&self, addr: &Multiaddr) -> Option<AddressablePeer> {

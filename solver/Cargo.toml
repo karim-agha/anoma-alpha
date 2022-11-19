@@ -12,6 +12,7 @@ path = "src/main.rs"
 anoma-network = { path = "../network", default-features = false }
 anoma-primitives = { path = "../primitives", default-features = false }
 
+rand = "0.8.5"
 anyhow = "1.0"
 futures = "0.3"
 multiaddr = "0.14"

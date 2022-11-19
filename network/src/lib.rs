@@ -11,4 +11,4 @@ mod wire;
 
 pub mod topic;
 
-pub use {config::Config, network::Network};
+pub use {bytes::Bytes, config::Config, network::Network};

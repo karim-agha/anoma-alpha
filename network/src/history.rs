@@ -44,13 +44,16 @@ impl History {
     if let Some(timestamp) = self.by_hash.get(&hash) {
       // it is in the history but already expired.
       if now - *timestamp > self.lifespan {
+        // move it to new time bucket
         let time_bucket = self.by_time.get_mut(timestamp).expect("in by_hash");
         time_bucket.remove(&hash);
         if time_bucket.is_empty() {
           self.by_time.remove(timestamp);
         }
-
         insert_by_time(&mut self.by_time);
+
+        // update the by_hash to point to the new time bucket
+        *self.by_hash.get_mut(&hash).expect("just checked") = now;
         return false;
       } else {
         return true; // it is in the cache and not expired
@@ -66,8 +69,8 @@ impl History {
     let now = Instant::now();
     let cutoff = now - self.lifespan;
     let mut removed_timestamps = vec![];
-    for (timestamp, messages) in self.by_time.iter().rev() {
-      if *timestamp >= cutoff {
+    for (timestamp, messages) in self.by_time.iter() {
+      if *timestamp < cutoff {
         for msg in messages {
           self.by_hash.remove(msg);
         }

@@ -599,7 +599,7 @@ impl TopicInner {
   /// Each node that receives a SHUFFLE message that replies with SHUFFLEREPLY
   /// with a sample of its own active and passive nodes that were not present
   /// in the SHUFFLE message.
-  fn consume_shuffle(&mut self, sender: PeerId, msg: Shuffle) {
+  fn consume_shuffle(&mut self, _sender: PeerId, msg: Shuffle) {
     increment_counter!(
       "received_shuffle",
       "topic" => self.topic_config.name.clone(),
@@ -615,7 +615,7 @@ impl TopicInner {
   /// of the SHUFFLE message. The SHUFFLEREPLY message should contain a sample
   /// of local node's known active and passive peers that were not present in
   /// the received SHUFFLE message.
-  fn consume_shuffle_reply(&mut self, sender: PeerId, msg: ShuffleReply) {
+  fn consume_shuffle_reply(&mut self, _sender: PeerId, msg: ShuffleReply) {
     increment_counter!(
       "received_shuffle_reply",
       "topic" => self.topic_config.name.clone(),
@@ -630,7 +630,7 @@ impl TopicInner {
   /// Those messages are emitted to listeners on this topic events.
   /// The message id is a randomly generated identifier by the originating
   /// node and is used to ignore duplicate messages.
-  fn consume_gossip(&mut self, sender: PeerId, msg: Bytes) {
+  fn consume_gossip(&mut self, _sender: PeerId, msg: Bytes) {
     gauge!(
       "gossip_size", msg.len() as f64,
       "topic" => self.topic_config.name.clone());
