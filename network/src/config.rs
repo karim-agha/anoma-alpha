@@ -38,6 +38,10 @@ pub struct Config {
   /// view anyway.
   pub shuffle_probability: f32,
 
+  /// The maximum number of peers to send from all views
+  /// in each shuffle operation.
+  pub shuffle_sample_size: usize,
+
   /// The number of hops a FORWARDJOIN message should
   /// travel across the network.
   pub forward_join_hops_count: u16,
@@ -58,6 +62,11 @@ pub struct Config {
   /// Note: Some higher level protocols might need to see duplicate
   /// values to optimize the broadcast overlay.
   pub dedupe_interval: Option<Duration>,
+
+  /// This is a periodic event that triggers all topics to perform
+  /// maintenance tasks. It gets emitted to topics regardless of
+  /// other topic activity.
+  pub tick_interval: Duration,
 }
 
 impl Config {
@@ -88,9 +97,11 @@ impl Default for Config {
       network_size: 1000,
       active_view_factor: 1,
       passive_view_factor: 6,
-      shuffle_probability: 1.0, // always shuffle all nodes
+      shuffle_sample_size: 30,
+      shuffle_probability: 0.3, // shuffle 30% of the time
+      shuffle_interval: Duration::from_secs(45),
+      tick_interval: Duration::from_millis(500),
       dedupe_interval: Some(Duration::from_secs(10)),
-      shuffle_interval: Duration::from_secs(60),
       max_transmit_size: 64 * 1024, // 64KB
       shuffle_hops_count: 3,
       forward_join_hops_count: 3,

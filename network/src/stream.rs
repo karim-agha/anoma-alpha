@@ -391,7 +391,9 @@ impl SubstreamHandler {
           break;
         }
         Some(OutboundSubstreamState::Poisoned) => {
-          unreachable!("Error occurred during outbound stream processing");
+          warn!("Substream poisoned, closing connection");
+          self.keep_alive = KeepAlive::No;
+          break;
         }
         None => {
           self.outbound_stream =

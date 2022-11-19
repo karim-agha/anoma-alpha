@@ -109,6 +109,11 @@ pub struct Network {
   /// store recent messages that were received by this node to ignore
   /// duplicates for some time.
   history: Option<History>,
+
+  /// Last time a network tick was triggered.
+  ///
+  /// See Config::tick_interval for more info.
+  last_tick: Instant,
 }
 
 impl Default for Network {
@@ -126,6 +131,7 @@ impl Network {
 
     Ok(Self {
       topics: HashMap::new(),
+      last_tick: Instant::now(),
       connections: ConnectionTracker::new(),
       history: config.dedupe_interval.map(History::new),
       runloop: Runloop::new(&config, keypair, commands.sender())?,
@@ -184,8 +190,14 @@ impl Network {
   /// created when calling [`Network::join`].
   pub async fn runloop(mut self) {
     while let Some(()) = self.next().await {
-      if let Some(ref mut history) = self.history {
-        history.prune();
+      if self.last_tick.elapsed() > self.config.tick_interval {
+        if let Some(ref mut history) = self.history {
+          history.prune();
+        }
+        for topic in self.topics.values_mut() {
+          topic.inject_event(Event::Tick);
+        }
+        self.last_tick = Instant::now();
       }
     }
   }

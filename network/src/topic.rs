@@ -23,12 +23,20 @@ use {
   libp2p::{Multiaddr, PeerId},
   metrics::{gauge, increment_counter},
   parking_lot::RwLock,
-  rand::seq::IteratorRandom,
+  rand::{
+    distributions::Standard,
+    rngs::StdRng,
+    seq::IteratorRandom,
+    thread_rng,
+    Rng,
+    SeedableRng,
+  },
   std::{
     collections::{HashMap, HashSet},
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
+    time::Instant,
   },
   thiserror::Error,
   tokio::sync::mpsc::UnboundedSender,
@@ -50,6 +58,7 @@ pub enum Event {
   LocalAddressDiscovered(Multiaddr),
   PeerConnected(AddressablePeer),
   PeerDisconnected(PeerId, bool), // (peer, graceful)
+  Tick,
 }
 
 /// Here the topic implementation lives. It is in an internal
@@ -62,6 +71,12 @@ struct TopicInner {
 
   /// Network wide config.
   network_config: crate::Config,
+
+  /// When the last time a shuffle operation happened on this topic
+  ///
+  /// This also includes attemtps to shuffle that resulted in not
+  /// performing the operation due to Config::shuffle_probability.
+  last_shuffle: Instant,
 
   /// Cryptographic identity of the current node and all known TCP
   /// addresses by which it can be reached. This list of addreses
@@ -107,6 +122,14 @@ struct TopicInner {
   /// This is to prevent spamming the same peer multiple times
   /// with JOIN requests if they add us to their active view.
   pending_joins: HashSet<PeerId>,
+
+  /// Peers that have originated a SHUFFLE that are not in
+  /// the current active view.
+  ///
+  /// When replying to the shuffle, a new temporary connection
+  /// is established with the originator, the shuffle reply is
+  /// sent and then immediately the connection is closed.
+  pending_shuffle_replies: HashMap<PeerId, ShuffleReply>,
 }
 
 /// A topic represents an instance of HyparView p2p overlay.
@@ -162,10 +185,12 @@ impl Topic {
         this_node,
         cmdtx,
         outmsgs: Channel::new(),
+        last_shuffle: Instant::now(),
         active_peers: HashMap::new(),
         passive_peers: HashMap::new(),
         pending_joins: HashSet::new(),
         pending_neighbours: HashSet::new(),
+        pending_shuffle_replies: HashMap::new(),
         pending_dials: topic_config.bootstrap.iter().cloned().collect(),
         topic_config,
       })),
@@ -175,7 +200,11 @@ impl Topic {
   /// Called when the network layer has a new event for this topic
   pub(crate) fn inject_event(&mut self, event: Event) {
     let mut inner = self.inner.write();
-    info!("{}: {event:?}", inner.topic_config.name);
+
+    if !matches!(event, Event::Tick) {
+      info!("{}: {event:?}", inner.topic_config.name);
+    }
+
     match event {
       Event::LocalAddressDiscovered(addr) => {
         inner.handle_new_local_address(addr);
@@ -189,6 +218,7 @@ impl Topic {
       Event::MessageReceived(peer, msg) => {
         inner.handle_message_received(peer, msg);
       }
+      Event::Tick => inner.handle_tick(),
     }
   }
 }
@@ -211,34 +241,7 @@ impl TopicInner {
     }
   }
 
-  /// Invoked when a connection is established with a remote peer.
-  /// When a node is dialed, we don't know its identity, only the
-  /// address we dialed it at. If it happens to be one of the nodes
-  /// that we have dialed into from this topic, send it a "JOIN"
-  /// message if our active view is not full yet.
-  fn handle_peer_connected(&mut self, peer: AddressablePeer) {
-    if self.starved()
-      && !self.pending_joins.contains(&peer.peer_id)
-      && !self.pending_neighbours.contains(&peer.peer_id)
-    {
-      for addr in &peer.addresses {
-        if self.pending_dials.remove(addr) {
-          self
-            .cmdtx
-            .send(Command::SendMessage {
-              peer: peer.peer_id,
-              msg: Message::new(
-                self.topic_config.name.clone(),
-                Action::Join(Join {
-                  node: self.this_node.clone(),
-                }),
-              ),
-            })
-            .expect("network lifetime > topic");
-        }
-      }
-    }
-
+  fn handle_pending_neighbours(&mut self, peer: &AddressablePeer) {
     if self.pending_neighbours.remove(&peer.peer_id) {
       self.send_message(
         peer.peer_id,
@@ -258,6 +261,74 @@ impl TopicInner {
     }
   }
 
+  fn handle_pending_shuffle_replies(&mut self, peer: &AddressablePeer) {
+    if let Some(reply) = self.pending_shuffle_replies.remove(&peer.peer_id) {
+      // this peer originated a shuffle operation and this
+      // is a temporary connection connection just to reply
+      // with our unique peer info.
+      self.send_message(
+        peer.peer_id,
+        Message::new(
+          self.topic_config.name.clone(),
+          Action::ShuffleReply(reply),
+        ),
+      );
+
+      increment_counter!("shuffle_reply");
+
+      for addr in &peer.addresses {
+        self.pending_dials.remove(addr);
+      }
+
+      // send & close connection
+      self.disconnect(peer.peer_id);
+    }
+  }
+
+  fn handle_non_pending_connects(&mut self, peer: &AddressablePeer) {
+    if self.starved()
+      && !self.pending_joins.contains(&peer.peer_id)
+      && !self.pending_neighbours.contains(&peer.peer_id)
+      && !self.pending_shuffle_replies.contains_key(&peer.peer_id)
+    {
+      for addr in &peer.addresses {
+        if self.pending_dials.remove(addr) {
+          increment_counter!(
+            "sent_join",
+            "topic" => self.topic_config.name.clone()
+          );
+
+          self
+            .cmdtx
+            .send(Command::SendMessage {
+              peer: peer.peer_id,
+              msg: Message::new(
+                self.topic_config.name.clone(),
+                Action::Join(Join {
+                  node: self.this_node.clone(),
+                }),
+              ),
+            })
+            .expect("network lifetime > topic");
+        }
+      }
+    }
+  }
+
+  /// Invoked when a connection is established with a remote peer.
+  /// When a node is dialed, we don't know its identity, only the
+  /// address we dialed it at. If it happens to be one of the nodes
+  /// that we have dialed into from this topic, send it a "JOIN"
+  /// message if our active view is not full yet.
+  fn handle_peer_connected(&mut self, peer: AddressablePeer) {
+    self.handle_non_pending_connects(&peer);
+    self.handle_pending_neighbours(&peer);
+    self.handle_pending_shuffle_replies(&peer);
+
+    gauge!("active_view_size", self.active_peers.len() as f64);
+    gauge!("passive_view_size", self.passive_peers.len() as f64);
+  }
+
   fn handle_peer_disconnected(&mut self, peer: PeerId, gracefully: bool) {
     // if the remote peer disconnected gracefuly move them to the passive view.
     if let Some(addrs) = self.active_peers.remove(&peer) {
@@ -267,6 +338,15 @@ impl TopicInner {
           addresses: addrs,
         });
       }
+    }
+
+    gauge!("active_view_size", self.active_peers.len() as f64);
+    gauge!("passive_view_size", self.passive_peers.len() as f64);
+  }
+
+  fn handle_tick(&mut self) {
+    if self.last_shuffle.elapsed() > self.network_config.shuffle_interval {
+      self.initiate_shuffle();
     }
   }
 }
@@ -347,10 +427,15 @@ impl TopicInner {
         .expect("already checked that it is not empty");
       self.remove_from_passive_view(random);
     }
+
+    gauge!("active_view_size", self.active_peers.len() as f64);
+    gauge!("passive_view_size", self.passive_peers.len() as f64);
   }
 
   fn remove_from_passive_view(&mut self, peer: PeerId) {
     self.passive_peers.remove(&peer);
+
+    gauge!("passive_view_size", self.passive_peers.len() as f64);
   }
 
   fn try_add_to_active_view(&mut self, peer: AddressablePeer) {
@@ -359,6 +444,9 @@ impl TopicInner {
     } else {
       self.add_to_passive_view(peer);
     }
+
+    gauge!("active_view_size", self.active_peers.len() as f64);
+    gauge!("passive_view_size", self.passive_peers.len() as f64);
   }
 
   fn add_to_active_view(&mut self, peer: AddressablePeer) {
@@ -382,12 +470,39 @@ impl TopicInner {
       // handle_peer_connected method.
       self.dial(addr);
     }
+
+    gauge!("active_view_size", self.active_peers.len() as f64);
+    gauge!("passive_view_size", self.passive_peers.len() as f64);
   }
 
   fn remove_from_active_view(&mut self, peer: PeerId) {
     if self.is_active(&peer) {
       self.disconnect(peer);
       self.active_peers.remove(&peer);
+    }
+
+    gauge!("active_view_size", self.active_peers.len() as f64);
+  }
+
+  /// Called whenever this node gets a chance to learn about new peers.
+  ///
+  /// If the active view is not saturated, it will randomly pick a peer
+  /// from the passive view and try to add it to the active view.
+  fn try_replenish_active_view(&mut self) {
+    if self.starved() {
+      if let Some(random) = self
+        .passive_peers
+        .values()
+        .choose(&mut thread_rng())
+        .cloned()
+      {
+        for addr in random {
+          // dial the node and on connect,
+          // if still starving JOIN request will be sent
+          // see handle_peer_connected for more context.
+          self.dial(addr.clone());
+        }
+      }
     }
   }
 }
@@ -422,17 +537,12 @@ impl TopicInner {
       // Seems like an impersonation attempt
       // JOIN messages are not forwarded to
       // other peers as is.
-      info!("join: sender != msg.node.peer_id");
       self.ban(sender);
       return;
     }
 
     if self.active_peers.contains_key(&sender) {
-      // its a protocol violation for a peer
-      // to send a join request to one of its
-      // active peers.
-      self.ban(sender);
-      return;
+      return; // already joined
     }
 
     // if not starving add to active, otherwise passive
@@ -606,7 +716,130 @@ impl TopicInner {
       "peers_count" => msg.peers.len().to_string()
     );
 
-    todo!()
+    let recv_peer_ids: HashSet<_> =
+      msg.peers.iter().map(|p| p.peer_id).collect();
+
+    let local_peer_ids: HashSet<_> = self
+      .active_peers
+      .keys()
+      .chain(self.passive_peers.keys())
+      .cloned()
+      .collect();
+
+    let unique_peers: HashSet<_> = recv_peer_ids
+      .symmetric_difference(&local_peer_ids) // rec /\ local
+      .cloned()
+      .collect();
+
+    gauge!("shuffle_unique_peers", unique_peers.len() as f64);
+
+    let new_peers: HashSet<_> = recv_peer_ids
+      .difference(&local_peer_ids) // rec \ local
+      .cloned()
+      .collect();
+
+    gauge!("shuffle_new_peers", new_peers.len() as f64);
+
+    // all peers are either in our passive view,
+    // our local active view, or the list of peers
+    // we have just learned about from the shuffle
+    // message. Given a peer ID construct a complete
+    // peer info from either of those sources.
+    macro_rules! collect_peer_addrs {
+      ($peer_id:expr) => {
+        self
+          .passive_peers
+          .get(&$peer_id)
+          .map(Clone::clone)
+          .or_else(|| self.active_peers.get(&$peer_id).map(Clone::clone))
+          .or_else(|| {
+            Some(
+              msg
+                .peers
+                .get(&AddressablePeer {
+                  peer_id: $peer_id,
+                  addresses: HashSet::new(),
+                })
+                .expect("the only remaining possibility")
+                .addresses
+                .clone(),
+            )
+          })
+          .expect("querying all possible sources")
+      };
+    }
+
+    // Respond to the shuffle initiator with a list of
+    // unique peers that we know about and were not
+    // present in their shuffle.
+    let shuffle_reply = ShuffleReply {
+      peers: unique_peers
+        .into_iter()
+        .map(|peer_id| AddressablePeer {
+          peer_id,
+          addresses: collect_peer_addrs!(peer_id),
+        })
+        .collect(),
+    };
+
+    // the new passive view is a random sample over
+    // what this node knew before the shuffle and
+    // new information learned during this shuffle.
+    self.passive_peers = local_peer_ids
+      .into_iter()
+      .chain(new_peers.into_iter())
+      .choose_multiple(
+        // random std sample
+        &mut thread_rng(),
+        self.network_config.max_passive_view_size(),
+      )
+      .into_iter()
+      .map(|peer_id| (peer_id, collect_peer_addrs!(peer_id)))
+      .collect();
+
+    // if the initiator is one of our active peers,
+    // then just respond to it on the open link.
+    if self.is_active(&msg.origin.peer_id) {
+      self.send_message(
+        msg.origin.peer_id,
+        Message::new(
+          self.topic_config.name.clone(),
+          Action::ShuffleReply(shuffle_reply),
+        ),
+      );
+
+      increment_counter!("shuffle_reply");
+    } else {
+      // otherwise, open a short-lived connection to
+      // the initiator and send the reply.
+      self
+        .pending_shuffle_replies
+        .insert(msg.origin.peer_id, shuffle_reply);
+
+      for addr in &msg.origin.addresses {
+        self.dial(addr.clone());
+      }
+    }
+
+    // forward the shuffle message until
+    // hop count reaches shuffle max hops
+    if msg.hop < self.network_config.shuffle_hops_count {
+      for peer in self.active_peers.keys() {
+        self.send_message(
+          *peer,
+          Message::new(
+            self.topic_config.name.clone(),
+            Action::Shuffle(Shuffle {
+              hop: msg.hop + 1,
+              origin: msg.origin.clone(),
+              peers: msg.peers.clone(),
+            }),
+          ),
+        )
+      }
+    }
+
+    self.try_replenish_active_view();
   }
 
   /// Handles SHUFFLEREPLY messages.
@@ -622,7 +855,51 @@ impl TopicInner {
       "peers_count" => msg.peers.len().to_string()
     );
 
-    todo!()
+    let new_peers: HashSet<_> = self
+      .passive_peers
+      .keys()
+      .collect::<HashSet<_>>()
+      .difference(&msg.peers.iter().map(|p| &p.peer_id).collect::<HashSet<_>>())
+      .map(|p| **p)
+      .collect();
+
+    gauge!("shuffle_reply_new", new_peers.len() as f64);
+
+    self.passive_peers = self
+      .passive_peers
+      .keys()
+      .chain(new_peers.iter()) // merge what we know with new knowledg
+      .choose_multiple( // and sample a random subset of it
+        &mut thread_rng(),
+        self.network_config.max_passive_view_size(),
+      )
+      .into_iter()
+      .map(|id| {
+        (
+          *id,
+          self
+            .passive_peers
+            .get(id)
+            .map(Clone::clone)
+            .or_else(|| {
+              Some(
+                msg
+                  .peers
+                  .get(&AddressablePeer {
+                    peer_id: *id,
+                    addresses: Default::default(),
+                  })
+                  .expect("covered all sources")
+                  .addresses
+                  .clone(),
+              )
+            })
+            .expect("all sources covered"),
+        )
+      })
+      .collect();
+
+    self.try_replenish_active_view();
   }
 
   /// Invoked when a content is gossiped to this node.
@@ -635,6 +912,59 @@ impl TopicInner {
       "gossip_size", msg.len() as f64,
       "topic" => self.topic_config.name.clone());
     self.outmsgs.send(msg);
+  }
+}
+
+impl TopicInner {
+  fn initiate_shuffle(&mut self) {
+    self.last_shuffle = Instant::now();
+
+    // range [0, 1)
+    let toss: f32 = StdRng::from_entropy().sample(Standard);
+    if (1.0 - toss) > self.network_config.shuffle_probability {
+      return; // not this time.
+    }
+
+    increment_counter!("shuffles");
+
+    // This is the list of peers that we will exchange
+    // with other peers during our shuffle operation.
+    let peers_sample = self
+      .active_peers
+      .keys()
+      .chain(self.passive_peers.keys())
+      .choose_multiple(
+        &mut thread_rng(),
+        self.network_config.shuffle_sample_size,
+      );
+
+    gauge!("shuffle_size", peers_sample.len() as f64);
+
+    // chose a random peer from the active view to initiate the shuffle with
+    if let Some(peer) = self.active_peers.keys().choose(&mut thread_rng()) {
+      self.send_message(
+        *peer,
+        Message::new(
+          self.topic_config.name.clone(),
+          Action::Shuffle(Shuffle {
+            hop: 0,
+            origin: self.this_node.clone(),
+            peers: peers_sample
+              .into_iter()
+              .map(|peer_id| AddressablePeer {
+                peer_id: *peer_id,
+                addresses: self
+                  .active_peers
+                  .get(peer_id)
+                  .or_else(|| self.passive_peers.get(peer_id))
+                  .expect("")
+                  .clone(),
+              })
+              .collect(),
+          }),
+        ),
+      );
+    }
   }
 }
 

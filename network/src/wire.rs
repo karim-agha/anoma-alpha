@@ -101,7 +101,7 @@ pub struct Shuffle {
   pub origin: AddressablePeer,
 
   /// A sample of known peers to the shuffle originator.
-  pub peers: Vec<AddressablePeer>,
+  pub peers: HashSet<AddressablePeer>,
 }
 
 /// Sent as a response to SHUFFLE to the shuffle originator.
@@ -113,7 +113,7 @@ pub struct Shuffle {
 pub struct ShuffleReply {
   /// A sample of known peers to the local node minus all
   /// nodes listed in the SHUFFLE message.
-  pub peers: Vec<AddressablePeer>,
+  pub peers: HashSet<AddressablePeer>,
 }
 
 /// Instructs a peer to end an active connection with the local node.
@@ -131,7 +131,7 @@ pub enum Action {
   Gossip(Bytes),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Message {
   pub topic: String,
   pub action: Action,
@@ -160,5 +160,14 @@ impl Message {
       action,
       hash_cache: OnceCell::default(),
     }
+  }
+}
+
+impl std::fmt::Debug for Message {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("Message")
+      .field("topic", &self.topic)
+      .field("action", &self.action)
+      .finish()
   }
 }
