@@ -6,6 +6,8 @@
 use {
   bytes::Bytes,
   libp2p::{Multiaddr, PeerId},
+  multihash::{Hasher, Multihash, MultihashDigest, Sha3_256},
+  once_cell::sync::OnceCell,
   serde::{Deserialize, Serialize},
   std::collections::HashSet,
 };
@@ -74,7 +76,7 @@ pub struct ForwardJoin {
 /// Sent as a response to JOIN, FORWARDJOIN to the initating node,
 /// or if a node is being moved from passive to active view.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Neighbor {
+pub struct Neighbour {
   /// Identity and address of the peer that is attempting
   /// to add this local node to its active view.
   pub peer: AddressablePeer,
@@ -116,18 +118,13 @@ pub struct ShuffleReply {
 
 /// Instructs a peer to end an active connection with the local node.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Disconnect {
-  /// If the disconnect is graceful (no protocol violation or network error)
-  /// then it is simply moved from the active view to the passive view.
-  /// Otherwise the peer is removed from both active and passive views.
-  pub graceful: bool,
-}
+pub struct Disconnect;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Action {
   Join(Join),
   ForwardJoin(ForwardJoin),
-  Neighbor(Neighbor),
+  Neighbour(Neighbour),
   Shuffle(Shuffle),
   ShuffleReply(ShuffleReply),
   Disconnect(Disconnect),
@@ -136,7 +133,32 @@ pub enum Action {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
-  pub id: u128,
   pub topic: String,
   pub action: Action,
+
+  #[serde(skip)]
+  hash_cache: OnceCell<Multihash>,
+}
+
+impl Message {
+  pub fn hash(&self) -> &Multihash {
+    self.hash_cache.get_or_init(|| {
+      let mut hasher = Sha3_256::default();
+      hasher.update(
+        &bincode::serialize(self)
+          .expect("all fields have serializable members"),
+      );
+      multihash::Code::Sha3_256
+        .wrap(hasher.finalize())
+        .expect("hash length matches hashcode")
+    })
+  }
+
+  pub fn new(topic: String, action: Action) -> Self {
+    Self {
+      topic,
+      action,
+      hash_cache: OnceCell::default(),
+    }
+  }
 }

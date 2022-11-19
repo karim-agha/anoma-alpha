@@ -1,7 +1,7 @@
 use {
   clap::Parser,
   multiaddr::{Multiaddr, Protocol},
-  std::net::SocketAddr,
+  std::{collections::HashSet, net::SocketAddr},
 };
 
 #[derive(Debug, Parser)]
@@ -27,7 +27,7 @@ impl CliOptions {
   /// the p2p gossip network. At the moment all topics use the
   /// same bootstrap peers, although the network API allows for
   /// per-topic peer sets.
-  pub fn peers(&self) -> Vec<Multiaddr> {
+  pub fn peers(&self) -> HashSet<Multiaddr> {
     self
       .peer
       .iter()

@@ -2,6 +2,7 @@ use {
   crate::{
     behaviour,
     channel::Channel,
+    history::History,
     runloop::{self, Runloop},
     topic::{self, Event, Topic},
     wire::{AddressablePeer, Message},
@@ -23,7 +24,7 @@ use {
     time::Instant,
   },
   thiserror::Error,
-  tracing::{debug, error},
+  tracing::{debug, error, info, warn},
 };
 
 #[derive(Debug, Error)]
@@ -56,6 +57,12 @@ pub(crate) enum Command {
   /// Sends a message to one peer in the active view of
   /// one of the topics.
   SendMessage { peer: PeerId, msg: Message },
+
+  /// Immediately disconnects a peer from all topics
+  /// and forbids it from connecting again to this node.
+  ///
+  /// This is invoked on protocol violation.
+  BanPeer(PeerId),
 
   /// Invoked by the runloop when a behaviour-level event
   /// is emitted on the background network thread.
@@ -97,6 +104,11 @@ pub struct Network {
   /// Used to track pending and active connections to peers
   /// and refcount them by the number of topics using a connection.
   connections: ConnectionTracker,
+
+  /// If message deduplication is turned on in config, this struct will
+  /// store recent messages that were received by this node to ignore
+  /// duplicates for some time.
+  history: Option<History>,
 }
 
 impl Default for Network {
@@ -115,6 +127,7 @@ impl Network {
     Ok(Self {
       topics: HashMap::new(),
       connections: ConnectionTracker::new(),
+      history: config.dedupe_interval.map(History::new),
       runloop: Runloop::new(&config, keypair, commands.sender())?,
       this: AddressablePeer {
         peer_id,
@@ -170,11 +183,21 @@ impl Network {
   /// interactions with the network happen through the [`Topic`] instances
   /// created when calling [`Network::join`].
   pub async fn runloop(mut self) {
-    while let Some(()) = self.next().await {}
+    while let Some(()) = self.next().await {
+      if let Some(ref mut history) = self.history {
+        history.prune();
+      }
+    }
   }
 }
 
 impl Network {
+  fn ban_peer(&self, peer: PeerId) {
+    increment_counter!("peers_banned");
+    info!("Banning peer {peer}");
+    self.runloop.send_command(runloop::Command::BanPeer(peer));
+  }
+
   /// Invoked by topics when they are attempting to establish
   /// a new active connection with some peer who's identity is
   /// not known yet but we know its address.
@@ -299,8 +322,8 @@ impl Network {
 
     // Emit disconnect events for all topics connected to this peer.
     // This happens when the link is lost because the remote peer disconnected
-    // for whatever reason including TCP errors and we still have topics that
-    // think that they are connected to it.
+    // for whatever reason including TCP errors, bans, etc and we still have
+    // topics that think that they are connected to it.
     if let Some(topics) = self.connections.remove_all_connections(peer) {
       for topic in topics {
         self
@@ -343,7 +366,21 @@ impl Network {
       "peer" => from.to_base58(),
       "topic" => msg.topic.clone()
     );
+
     if let Some(topic) = self.topics.get_mut(&msg.topic) {
+      // if deduplication is enabled and we've seen this message
+      // recently, then ignore it and don't propagate to topics.
+      if let Some(ref mut history) = self.history {
+        if history.insert(&msg) {
+          increment_counter!(
+            "duplicate_messages",
+            "peer" => from.to_base58(),
+            "topic" => msg.topic.clone()
+          );
+          return;
+        }
+      }
+
       // If this is the first message from a peer that dialed us,
       // on this topic, then signal that it has connected to the
       // relevant topic
@@ -367,7 +404,7 @@ impl Network {
       topic.inject_event(topic::Event::MessageReceived(from, msg));
     } else {
       // sending messages on unsubscribed topics is a protocol violation
-      self.runloop.send_command(runloop::Command::BanPeer(from));
+      self.ban_peer(from);
     }
   }
 
@@ -429,6 +466,7 @@ impl Stream for Network {
             .runloop
             .send_command(runloop::Command::SendMessage { peer, msg });
         }
+        Command::BanPeer(peer) => self.ban_peer(peer),
         Command::InjectEvent(event) => self.inject_event(event),
       }
 

@@ -46,6 +46,18 @@ pub struct Config {
   /// connections. By default it will listen on all available IPv4 and IPv6
   /// addresses on port 44668.
   pub listen_addrs: Vec<Multiaddr>,
+
+  /// How long identical messages will be ignored
+  /// by peers if the arrive at the same node.
+  ///
+  /// In a p2p network the same message could very likely
+  /// arrive at some node multiple times if there is a cycle
+  /// in the P2P connectivity graph. If this value is set, then
+  /// identical messages will be ignored for some time.
+  ///
+  /// Note: Some higher level protocols might need to see duplicate
+  /// values to optimize the broadcast overlay.
+  pub dedupe_interval: Option<Duration>,
 }
 
 impl Config {
@@ -77,6 +89,7 @@ impl Default for Config {
       active_view_factor: 1,
       passive_view_factor: 6,
       shuffle_probability: 1.0, // always shuffle all nodes
+      dedupe_interval: Some(Duration::from_secs(10)),
       shuffle_interval: Duration::from_secs(60),
       max_transmit_size: 64 * 1024, // 64KB
       shuffle_hops_count: 3,
