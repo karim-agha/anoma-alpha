@@ -167,11 +167,7 @@ impl Network {
       ),
     );
 
-    gauge!(
-      "topics_joined",
-      self.connections.open_connections_count() as f64
-    );
-
+    increment_counter!("topics_joined");
     Ok(self.topics.get(&name).unwrap().clone())
   }
 
@@ -198,6 +194,17 @@ impl Network {
           topic.inject_event(Event::Tick);
         }
         self.last_tick = Instant::now();
+
+        // metrics & observability
+        gauge!(
+          "connected_peers",
+          self.connections.open_connections_count() as f64
+        );
+
+        gauge!(
+          "pending_peers",
+          self.connections.pending_connections_count() as f64
+        );
       }
     }
   }
@@ -252,6 +259,7 @@ impl Network {
   /// is established with a peer and its identity is known.
   fn complete_connect(&mut self, peer: AddressablePeer, dialer: bool) {
     if dialer {
+      increment_counter!("dials_outgoing");
       for topic in self.connections.get_pending_dials(&peer) {
         self.connections.add_connection(peer.peer_id, &topic);
         self.connections.remove_pending_dial(&peer, &topic);
@@ -264,19 +272,9 @@ impl Network {
         topic.inject_event(Event::PeerConnected(peer.clone()));
       }
     } else {
+      increment_counter!("dials_incoming");
       self.connections.add_pending_connection(peer);
     }
-
-    // metrics & observability
-    gauge!(
-      "connected_peers",
-      self.connections.open_connections_count() as f64
-    );
-
-    gauge!(
-      "pending_peers",
-      self.connections.pending_connections_count() as f64
-    );
   }
 
   fn begin_disconnect(&mut self, peer: PeerId, topic: String) {
@@ -342,17 +340,6 @@ impl Network {
           .inject_event(Event::PeerDisconnected(peer, false));
       }
     }
-
-    // metrics & observability
-    gauge!(
-      "connected_peers",
-      self.connections.open_connections_count() as f64
-    );
-
-    gauge!(
-      "pending_peers",
-      self.connections.pending_connections_count() as f64
-    );
   }
 
   fn append_local_address(&mut self, address: Multiaddr) {
@@ -531,7 +518,7 @@ impl ConnectionTracker {
   }
 
   fn open_connections_count(&self) -> usize {
-    self.connections.len()
+    self.connections.len() + self.pending_connections_count()
   }
 
   fn pending_connections_count(&self) -> usize {

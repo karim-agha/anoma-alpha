@@ -8,9 +8,15 @@ pub struct Config {
 
   /// HyParView Active View constant
   /// active view size = Ln(N) + C
-  /// 
+  ///
   /// This is the fan-out of the node.
   pub active_view_factor: usize,
+
+  /// If the active view size is smaller than
+  /// this percentage of the maximum view size,
+  /// then all neighbour requests will be high
+  /// priority.
+  pub active_view_starve_factor: f64,
 
   /// HyParView Passive View constant
   /// active view size = C * Ln(N)
@@ -78,14 +84,14 @@ impl Config {
   }
 
   /// A node is considered starving when it's active view size is less than
-  /// this value. It will try to maintain half of `max_active_view_size` to
-  /// achieve minimum level of connection redundancy, another half is reserved
-  /// for peering connections from other nodes.
+  /// this value. It will try to maintain half at least active_view_starve_factor to
+  /// achieve minimum level of connection redundancy.
   ///
   /// Two thresholds allow to avoid cyclical connections and disconnections when
   /// new nodes are connected to a group of overconnected nodes.
   pub fn min_active_view_size(&self) -> usize {
-    self.max_active_view_size().div_euclid(2).max(1)
+    (self.max_active_view_size() as f64 * self.active_view_starve_factor)
+      .ceil() as usize
   }
 
   pub fn max_passive_view_size(&self) -> usize {
@@ -98,10 +104,11 @@ impl Default for Config {
     Self {
       network_size: 1000,
       active_view_factor: 1,
+      active_view_starve_factor: 0.3, // 30%
       passive_view_factor: 6,
       shuffle_sample_size: 30,
       shuffle_probability: 0.3, // shuffle 30% of the time
-      shuffle_interval: Duration::from_secs(45),
+      shuffle_interval: Duration::from_secs(60 * 5), // every 5 minutes
       tick_interval: Duration::from_millis(500),
       dedupe_interval: Some(Duration::from_secs(10)),
       max_transmit_size: 64 * 1024, // 64KB

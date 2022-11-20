@@ -249,7 +249,7 @@ impl TopicInner {
           self.topic_config.name.clone(),
           Action::Neighbour(Neighbour {
             peer: self.this_node.clone(),
-            high_priority: self.active_peers.is_empty(),
+            high_priority: self.starved(),
           }),
         ),
       );
@@ -286,7 +286,7 @@ impl TopicInner {
   }
 
   fn handle_non_pending_connects(&mut self, peer: &AddressablePeer) {
-    if self.starved()
+    if !self.active_view_full()
       && !self.pending_joins.contains(&peer.peer_id)
       && !self.pending_neighbours.contains(&peer.peer_id)
       && !self.pending_shuffle_replies.contains_key(&peer.peer_id)
@@ -324,9 +324,6 @@ impl TopicInner {
     self.handle_non_pending_connects(&peer);
     self.handle_pending_neighbours(&peer);
     self.handle_pending_shuffle_replies(&peer);
-
-    gauge!("active_view_size", self.active_peers.len() as f64);
-    gauge!("passive_view_size", self.passive_peers.len() as f64);
   }
 
   fn handle_peer_disconnected(&mut self, peer: PeerId, gracefully: bool) {
@@ -340,14 +337,17 @@ impl TopicInner {
       }
     }
 
-    gauge!("active_view_size", self.active_peers.len() as f64);
-    gauge!("passive_view_size", self.passive_peers.len() as f64);
+    self.try_replenish_active_view();
   }
 
   fn handle_tick(&mut self) {
     if self.last_shuffle.elapsed() > self.network_config.shuffle_interval {
       self.initiate_shuffle();
     }
+
+    // observability
+    gauge!("active_view_size", self.active_peers.len() as f64);
+    gauge!("passive_view_size", self.passive_peers.len() as f64);
   }
 }
 
@@ -364,7 +364,12 @@ impl TopicInner {
   /// Starved topics are ones where the active view
   /// doesn't have a minimum set of nodes in it.
   fn starved(&self) -> bool {
-    self.active_peers.len() < self.network_config.max_active_view_size()
+    self.active_peers.len() < self.network_config.min_active_view_size()
+  }
+
+  /// Full topics are ones that have their active view full.
+  fn active_view_full(&self) -> bool {
+    self.active_peers.len() >= self.network_config.max_active_view_size()
   }
 
   /// Initiates a graceful disconnect from an active peer.
@@ -427,26 +432,18 @@ impl TopicInner {
         .expect("already checked that it is not empty");
       self.remove_from_passive_view(random);
     }
-
-    gauge!("active_view_size", self.active_peers.len() as f64);
-    gauge!("passive_view_size", self.passive_peers.len() as f64);
   }
 
   fn remove_from_passive_view(&mut self, peer: PeerId) {
     self.passive_peers.remove(&peer);
-
-    gauge!("passive_view_size", self.passive_peers.len() as f64);
   }
 
   fn try_add_to_active_view(&mut self, peer: AddressablePeer) {
-    if self.starved() {
+    if !self.active_view_full() {
       self.add_to_active_view(peer);
     } else {
       self.add_to_passive_view(peer);
     }
-
-    gauge!("active_view_size", self.active_peers.len() as f64);
-    gauge!("passive_view_size", self.passive_peers.len() as f64);
   }
 
   fn add_to_active_view(&mut self, peer: AddressablePeer) {
@@ -470,9 +467,6 @@ impl TopicInner {
       // handle_peer_connected method.
       self.dial(addr);
     }
-
-    gauge!("active_view_size", self.active_peers.len() as f64);
-    gauge!("passive_view_size", self.passive_peers.len() as f64);
   }
 
   fn remove_from_active_view(&mut self, peer: PeerId) {
@@ -480,8 +474,6 @@ impl TopicInner {
       self.disconnect(peer);
       self.active_peers.remove(&peer);
     }
-
-    gauge!("active_view_size", self.active_peers.len() as f64);
   }
 
   /// Called whenever this node gets a chance to learn about new peers.
@@ -489,7 +481,7 @@ impl TopicInner {
   /// If the active view is not saturated, it will randomly pick a peer
   /// from the passive view and try to add it to the active view.
   fn try_replenish_active_view(&mut self) {
-    if self.starved() {
+    if !self.active_view_full() {
       if let Some(random) = self
         .passive_peers
         .values()
@@ -597,7 +589,7 @@ impl TopicInner {
 
     // if last hop, must create active connection
     if msg.hop == self.network_config.forward_join_hops_count {
-      if !self.starved() {
+      if self.active_view_full() {
         // our active view is full, need to free up a slot
         let random = *self
           .active_peers
@@ -656,7 +648,7 @@ impl TopicInner {
     self.pending_joins.remove(&sender);
     self.pending_joins.remove(&msg.peer.peer_id);
 
-    if !self.starved() && msg.high_priority {
+    if self.active_view_full() && msg.high_priority {
       // our active view is full, need to free up a slot
       let random = *self
         .active_peers
@@ -666,11 +658,13 @@ impl TopicInner {
       self.remove_from_active_view(random);
     }
 
-    if self.starved() {
+    if !self.active_view_full() {
       self.add_to_active_view(msg.peer);
     } else {
       self.disconnect(sender);
     }
+
+    self.try_replenish_active_view();
   }
 
   /// Handles DISCONNECT messages.
@@ -691,6 +685,8 @@ impl TopicInner {
         peer: sender,
       })
       .expect("topic lifetime < network lifetime");
+
+    self.try_replenish_active_view();
   }
 
   /// Handles SHUFFLE messages.
@@ -911,6 +907,10 @@ impl TopicInner {
     gauge!(
       "gossip_size", msg.len() as f64,
       "topic" => self.topic_config.name.clone());
+    increment_counter!(
+      "messags_consumed",
+      "topic" => self.topic_config.name.clone());
+
     self.outmsgs.send(msg);
   }
 }
