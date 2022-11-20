@@ -8,6 +8,8 @@ pub struct Config {
 
   /// HyParView Active View constant
   /// active view size = Ln(N) + C
+  /// 
+  /// This is the fan-out of the node.
   pub active_view_factor: usize,
 
   /// HyParView Passive View constant

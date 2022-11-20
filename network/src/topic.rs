@@ -726,12 +726,12 @@ impl TopicInner {
       .cloned()
       .collect();
 
-    let unique_peers: HashSet<_> = recv_peer_ids
-      .symmetric_difference(&local_peer_ids) // rec /\ local
+    let resp_unique_peers: HashSet<_> = local_peer_ids
+      .difference(&recv_peer_ids) // local \ rec
       .cloned()
       .collect();
 
-    gauge!("shuffle_unique_peers", unique_peers.len() as f64);
+    gauge!("shuffle_unique_peers", resp_unique_peers.len() as f64);
 
     let new_peers: HashSet<_> = recv_peer_ids
       .difference(&local_peer_ids) // rec \ local
@@ -773,7 +773,7 @@ impl TopicInner {
     // unique peers that we know about and were not
     // present in their shuffle.
     let shuffle_reply = ShuffleReply {
-      peers: unique_peers
+      peers: resp_unique_peers
         .into_iter()
         .map(|peer_id| AddressablePeer {
           peer_id,
