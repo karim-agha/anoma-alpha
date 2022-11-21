@@ -1,8 +1,8 @@
 use {
   crate::{
     behaviour,
+    cache::ExpiringSet,
     channel::Channel,
-    history::History,
     runloop::{self, Runloop},
     topic::{self, Event, Topic},
     wire::{AddressablePeer, Message},
@@ -17,6 +17,7 @@ use {
     TransportError,
   },
   metrics::{gauge, increment_counter},
+  multihash::Multihash,
   std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     pin::Pin,
@@ -24,7 +25,8 @@ use {
     time::Instant,
   },
   thiserror::Error,
-  tracing::{debug, error, info},
+  tokio::time::{interval, Interval},
+  tracing::{debug, error, warn},
 };
 
 #[derive(Debug, Error)]
@@ -108,12 +110,12 @@ pub struct Network {
   /// If message deduplication is turned on in config, this struct will
   /// store recent messages that were received by this node to ignore
   /// duplicates for some time.
-  history: Option<History>,
+  history: Option<ExpiringSet<Multihash>>,
 
   /// Last time a network tick was triggered.
   ///
   /// See Config::tick_interval for more info.
-  last_tick: Instant,
+  tick: Interval,
 }
 
 impl Default for Network {
@@ -128,12 +130,11 @@ impl Network {
   pub fn new(config: Config, keypair: Keypair) -> Result<Self, Error> {
     let peer_id = keypair.public().into();
     let commands = Channel::new();
-
     Ok(Self {
       topics: HashMap::new(),
-      last_tick: Instant::now(),
+      tick: interval(config.tick_interval),
       connections: ConnectionTracker::new(),
-      history: config.dedupe_interval.map(History::new),
+      history: config.dedupe_interval.map(ExpiringSet::new),
       runloop: Runloop::new(&config, keypair, commands.sender())?,
       this: AddressablePeer {
         peer_id,
@@ -186,26 +187,16 @@ impl Network {
   /// created when calling [`Network::join`].
   pub async fn runloop(mut self) {
     while let Some(()) = self.next().await {
-      if self.last_tick.elapsed() > self.config.tick_interval {
-        if let Some(ref mut history) = self.history {
-          history.prune();
-        }
-        for topic in self.topics.values_mut() {
-          topic.inject_event(Event::Tick);
-        }
-        self.last_tick = Instant::now();
+      // metrics & observability
+      gauge!(
+        "connected_peers",
+        self.connections.open_connections_count() as f64
+      );
 
-        // metrics & observability
-        gauge!(
-          "connected_peers",
-          self.connections.open_connections_count() as f64
-        );
-
-        gauge!(
-          "pending_peers",
-          self.connections.pending_connections_count() as f64
-        );
-      }
+      gauge!(
+        "pending_peers",
+        self.connections.pending_connections_count() as f64
+      );
     }
   }
 }
@@ -213,7 +204,7 @@ impl Network {
 impl Network {
   fn ban_peer(&self, peer: PeerId) {
     increment_counter!("peers_banned");
-    info!("Banning peer {peer}");
+    warn!("Banning peer {peer}");
     self.runloop.send_command(runloop::Command::BanPeer(peer));
   }
 
@@ -358,20 +349,20 @@ impl Network {
       "topic" => msg.topic.clone()
     );
 
-    if let Some(topic) = self.topics.get_mut(&msg.topic) {
-      // if deduplication is enabled and we've seen this message
-      // recently, then ignore it and don't propagate to topics.
-      if let Some(ref mut history) = self.history {
-        if history.insert(&msg) {
-          increment_counter!(
-            "duplicate_messages",
-            "peer" => from.to_base58(),
-            "topic" => msg.topic.clone()
-          );
-          return;
-        }
+    // if deduplication is enabled and we've seen this message
+    // recently, then ignore it and don't propagate to topics.
+    if let Some(ref mut history) = self.history {
+      if history.insert(*msg.hash()) {
+        increment_counter!(
+          "duplicate_messages",
+          "peer" => from.to_base58(),
+          "topic" => msg.topic.clone()
+        );
+        return;
       }
+    }
 
+    if let Some(topic) = self.topics.get_mut(&msg.topic) {
       // If this is the first message from a peer that dialed us,
       // on this topic, then signal that it has connected to the
       // relevant topic
@@ -434,6 +425,18 @@ impl Stream for Network {
     mut self: Pin<&mut Self>,
     cx: &mut Context<'_>,
   ) -> Poll<Option<Self::Item>> {
+    if self.tick.poll_tick(cx).is_ready() {
+      for topic in self.topics.values_mut() {
+        topic.inject_event(Event::Tick);
+      }
+
+      if let Some(ref mut history) = self.history {
+        history.prune_expired();
+      }
+
+      return Poll::Ready(Some(()));
+    }
+
     if let Poll::Ready(Some(command)) = self.commands.poll_recv(cx) {
       debug!("network command: {command:?}");
       match command {
@@ -454,6 +457,7 @@ impl Stream for Network {
 
       return Poll::Ready(Some(()));
     }
+
     Poll::Pending
   }
 }
@@ -518,7 +522,7 @@ impl ConnectionTracker {
   }
 
   fn open_connections_count(&self) -> usize {
-    self.connections.len() + self.pending_connections_count()
+    self.connections.len()
   }
 
   fn pending_connections_count(&self) -> usize {

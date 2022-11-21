@@ -26,10 +26,6 @@ pub struct Config {
   /// control and payload messages
   pub max_transmit_size: usize,
 
-  /// The number of hops a shuffle message should
-  /// travel across the network.
-  pub shuffle_hops_count: u16,
-
   /// How often a peer shuffle happens
   /// with a random active peer
   pub shuffle_interval: Duration,
@@ -50,10 +46,6 @@ pub struct Config {
   /// in each shuffle operation.
   pub shuffle_sample_size: usize,
 
-  /// The number of hops a FORWARDJOIN message should
-  /// travel across the network.
-  pub forward_join_hops_count: u16,
-
   /// Local network addresses this node will listen on for incoming
   /// connections. By default it will listen on all available IPv4 and IPv6
   /// addresses on port 44668.
@@ -71,6 +63,13 @@ pub struct Config {
   /// values to optimize the broadcast overlay.
   pub dedupe_interval: Option<Duration>,
 
+  /// How long it takes asynchronous network IO operations to timeout
+  /// and considered failed.
+  ///
+  /// This includes waiting for Dial operations to complete, waiting
+  /// for shuffle response connections, etc.
+  pub pending_timeout: Duration,
+
   /// This is a periodic event that triggers all topics to perform
   /// maintenance tasks. It gets emitted to topics regardless of
   /// other topic activity.
@@ -84,36 +83,40 @@ impl Config {
   }
 
   /// A node is considered starving when it's active view size is less than
-  /// this value. It will try to maintain half at least active_view_starve_factor to
-  /// achieve minimum level of connection redundancy.
+  /// this value. It will try to maintain half at least
+  /// active_view_starve_factor to achieve minimum level of connection
+  /// redundancy.
   ///
   /// Two thresholds allow to avoid cyclical connections and disconnections when
   /// new nodes are connected to a group of overconnected nodes.
   pub fn min_active_view_size(&self) -> usize {
-    (self.max_active_view_size() as f64 * self.active_view_starve_factor)
-      .ceil() as usize
+    (self.max_active_view_size() as f64 * self.active_view_starve_factor).ceil()
+      as usize
   }
 
   pub fn max_passive_view_size(&self) -> usize {
     self.max_active_view_size() * self.passive_view_factor
+  }
+
+  pub fn max_hops_count(&self) -> usize {
+    (self.network_size as f64).log10().ceil() as usize
   }
 }
 
 impl Default for Config {
   fn default() -> Self {
     Self {
-      network_size: 1000,
+      network_size: 100,
       active_view_factor: 1,
       active_view_starve_factor: 0.3, // 30%
       passive_view_factor: 6,
       shuffle_sample_size: 30,
       shuffle_probability: 0.3, // shuffle 30% of the time
-      shuffle_interval: Duration::from_secs(60 * 5), // every 5 minutes
+      shuffle_interval: Duration::from_secs(60), // every minute (during dev)
       tick_interval: Duration::from_millis(500),
+      pending_timeout: Duration::from_secs(10),
       dedupe_interval: Some(Duration::from_secs(10)),
       max_transmit_size: 64 * 1024, // 64KB
-      shuffle_hops_count: 3,
-      forward_join_hops_count: 3,
       listen_addrs: vec![
         "/ip4/0.0.0.0/tcp/44668".parse().unwrap(),
         "/ip6/::/tcp/44668".parse().unwrap(),

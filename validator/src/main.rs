@@ -32,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
     bootstrap: opts.peers(),
   })?;
 
-  intents_topic.gossip(vec![1u8, 2, 3].into());
+  // intents_topic.gossip(vec![1u8, 2, 3].into());
 
   tokio::spawn(async move {
     let mut intents_topic = intents_topic;
@@ -50,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
     bootstrap: opts.peers(),
   })?;
 
-  transactions_topic.gossip(vec![4u8, 5, 6].into());
+  // transactions_topic.gossip(vec![4u8, 5, 6].into());
 
   tokio::spawn(async move {
     let mut transactions_topic = transactions_topic;

@@ -271,6 +271,8 @@ impl SubstreamHandler {
         }
         Some(InboundSubstreamState::Poisoned) => {
           error!("Error occurred during inbound stream processing");
+          self.keep_alive = KeepAlive::No;
+          break;
         }
         None => {
           self.inbound_stream = None;

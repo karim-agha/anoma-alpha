@@ -4,6 +4,7 @@
 
 use {
   crate::{
+    cache::{ExpiringMap, ExpiringSet},
     channel::Channel,
     network::Command,
     wire::{
@@ -40,7 +41,7 @@ use {
   },
   thiserror::Error,
   tokio::sync::mpsc::UnboundedSender,
-  tracing::{debug, info},
+  tracing::{debug, info, warn},
 };
 
 #[derive(Debug, Error)]
@@ -110,18 +111,22 @@ struct TopicInner {
   /// Peers that we have dialed by address only without knowing their
   /// identity. This is used to send JOIN messages once a connection
   /// is established.
-  pending_dials: HashSet<Multiaddr>,
+  pending_dials: ExpiringSet<Multiaddr>,
 
   /// Peers that we have dialed because we want to add them to the active
   /// peers. Peers in this collection will be sent NEIGHBOUR message when
   /// a connection to them is established.
-  pending_neighbours: HashSet<PeerId>,
+  pending_neighbours: ExpiringSet<PeerId>,
 
-  /// Peers that have received a JOIN message from us.
+  /// Peers that have received or sent a JOIN message to us.
   ///
   /// This is to prevent spamming the same peer multiple times
   /// with JOIN requests if they add us to their active view.
-  pending_joins: HashSet<PeerId>,
+  ///
+  /// This also prevents a peer from initiating many forward join
+  /// floods on the network. Peers added to this set are never
+  /// removed, instead, they expire (on both sides of the wire).
+  pending_joins: ExpiringSet<PeerId>,
 
   /// Peers that have originated a SHUFFLE that are not in
   /// the current active view.
@@ -129,7 +134,11 @@ struct TopicInner {
   /// When replying to the shuffle, a new temporary connection
   /// is established with the originator, the shuffle reply is
   /// sent and then immediately the connection is closed.
-  pending_shuffle_replies: HashMap<PeerId, ShuffleReply>,
+  pending_shuffle_replies: ExpiringMap<PeerId, ShuffleReply>,
+
+  /// Peers that we've sent DISCONNECT messages and are waiting
+  /// for them to close the connection with us.
+  pending_disconnects: ExpiringSet<PeerId>,
 }
 
 /// A topic represents an instance of HyparView p2p overlay.
@@ -169,6 +178,9 @@ impl Topic {
     this_node: AddressablePeer,
     cmdtx: UnboundedSender<Command>,
   ) -> Self {
+    let timeout = network_config.pending_timeout;
+    let mut pending_dials = ExpiringSet::new(timeout);
+
     // dial all bootstrap nodes
     for addr in topic_config.bootstrap.iter() {
       cmdtx
@@ -177,22 +189,24 @@ impl Topic {
           topic: topic_config.name.clone(),
         })
         .expect("lifetime of network should be longer than topic");
+      pending_dials.insert(addr.clone());
     }
 
     Self {
       inner: Arc::new(RwLock::new(TopicInner {
-        network_config,
-        this_node,
-        cmdtx,
         outmsgs: Channel::new(),
         last_shuffle: Instant::now(),
         active_peers: HashMap::new(),
         passive_peers: HashMap::new(),
-        pending_joins: HashSet::new(),
-        pending_neighbours: HashSet::new(),
-        pending_shuffle_replies: HashMap::new(),
-        pending_dials: topic_config.bootstrap.iter().cloned().collect(),
+        pending_joins: ExpiringSet::new(timeout),
+        pending_neighbours: ExpiringSet::new(timeout),
+        pending_disconnects: ExpiringSet::new(timeout),
+        pending_shuffle_replies: ExpiringMap::new(timeout),
+        cmdtx,
+        this_node,
         topic_config,
+        pending_dials,
+        network_config,
       })),
     }
   }
@@ -249,15 +263,11 @@ impl TopicInner {
           self.topic_config.name.clone(),
           Action::Neighbour(Neighbour {
             peer: self.this_node.clone(),
-            high_priority: self.starved(),
+            high_priority: self.active_peers.is_empty(),
           }),
         ),
       );
-
-      for addr in &peer.addresses {
-        self.pending_dials.remove(addr);
-      }
-      self.passive_peers.remove(&peer.peer_id);
+      self.add_to_active_view(peer.clone());
     }
   }
 
@@ -276,42 +286,42 @@ impl TopicInner {
 
       increment_counter!("shuffle_reply");
 
-      for addr in &peer.addresses {
-        self.pending_dials.remove(addr);
+      // send & close connection if not in active view
+      if !self.is_active(&peer.peer_id) {
+        self.disconnect(peer.peer_id);
       }
-
-      // send & close connection
-      self.disconnect(peer.peer_id);
     }
   }
 
+  /// If we have dialed a peer and that peer was not dialed
+  /// specifically for a known operation, then send them a
+  /// request to join the topic. This case occurs only when
+  /// dialing a bootstrap node.
   fn handle_non_pending_connects(&mut self, peer: &AddressablePeer) {
     if !self.active_view_full()
+      && self.is_pending_dial(peer)
       && !self.pending_joins.contains(&peer.peer_id)
       && !self.pending_neighbours.contains(&peer.peer_id)
       && !self.pending_shuffle_replies.contains_key(&peer.peer_id)
     {
-      for addr in &peer.addresses {
-        if self.pending_dials.remove(addr) {
-          increment_counter!(
-            "sent_join",
-            "topic" => self.topic_config.name.clone()
-          );
+      self
+        .cmdtx
+        .send(Command::SendMessage {
+          peer: peer.peer_id,
+          msg: Message::new(
+            self.topic_config.name.clone(),
+            Action::Join(Join {
+              node: self.this_node.clone(),
+            }),
+          ),
+        })
+        .expect("network lifetime > topic");
 
-          self
-            .cmdtx
-            .send(Command::SendMessage {
-              peer: peer.peer_id,
-              msg: Message::new(
-                self.topic_config.name.clone(),
-                Action::Join(Join {
-                  node: self.this_node.clone(),
-                }),
-              ),
-            })
-            .expect("network lifetime > topic");
-        }
-      }
+      // take note that we have sent a JOIN request to this node.
+      // This value will expire after some time, and we will be able
+      // to retry joining if no peer at all establishes a connection
+      // with us.
+      self.pending_joins.insert(peer.peer_id);
     }
   }
 
@@ -324,20 +334,17 @@ impl TopicInner {
     self.handle_non_pending_connects(&peer);
     self.handle_pending_neighbours(&peer);
     self.handle_pending_shuffle_replies(&peer);
+
+    for addr in &peer.addresses {
+      self.pending_dials.remove(addr);
+    }
   }
 
-  fn handle_peer_disconnected(&mut self, peer: PeerId, gracefully: bool) {
-    // if the remote peer disconnected gracefuly move them to the passive view.
-    if let Some(addrs) = self.active_peers.remove(&peer) {
-      if gracefully {
-        self.add_to_passive_view(AddressablePeer {
-          peer_id: peer,
-          addresses: addrs,
-        });
-      }
-    }
-
-    self.try_replenish_active_view();
+  fn handle_peer_disconnected(&mut self, peer: PeerId, _: bool) {
+    self.move_active_to_passive(peer);
+    self.pending_neighbours.remove(&peer);
+    self.pending_shuffle_replies.remove(&peer);
+    self.pending_disconnects.remove(&peer);
   }
 
   fn handle_tick(&mut self) {
@@ -345,64 +352,96 @@ impl TopicInner {
       self.initiate_shuffle();
     }
 
+    // if we're idle and the active view is not
+    // full, then try to connect to one of the
+    // passive peers and add them to active view
+    if !self.active_view_full()
+      && self.pending_dials.is_empty()
+      && self.pending_neighbours.is_empty()
+    {
+      self.try_stabilize_active_view();
+    }
+
     // observability
     gauge!("active_view_size", self.active_peers.len() as f64);
     gauge!("passive_view_size", self.passive_peers.len() as f64);
+    gauge!("pending_dials", self.pending_dials.len() as f64);
+    gauge!("pending_joins", self.pending_joins.len() as f64);
+    gauge!("pending_neighbours", self.pending_neighbours.len() as f64);
+
+    debug!(
+      "(a: {}, p: {}, j: {}, n: {}, d: {}, dc: {}, t: {})",
+      self.active_peers.len(),
+      self.passive_peers.len(),
+      self.pending_joins.len(),
+      self.pending_neighbours.len(),
+      self.pending_dials.len(),
+      self.pending_disconnects.len(),
+      self.topic_config.name
+    );
   }
 }
 
 impl TopicInner {
-  /// Checks if a peer is already in the active view of this topic.
-  /// This is used to check if we need to send JOIN message when
-  /// the peer is dialed, peers that are active will not get
-  /// a JOIN request, otherwise the network will go into endless
-  /// join/forward churn.
-  fn is_active(&self, peer: &PeerId) -> bool {
-    self.active_peers.contains_key(peer)
-  }
-
-  /// Starved topics are ones where the active view
-  /// doesn't have a minimum set of nodes in it.
-  fn starved(&self) -> bool {
-    self.active_peers.len() < self.network_config.min_active_view_size()
-  }
-
-  /// Full topics are ones that have their active view full.
-  fn active_view_full(&self) -> bool {
-    self.active_peers.len() >= self.network_config.max_active_view_size()
-  }
-
   /// Initiates a graceful disconnect from an active peer.
   fn disconnect(&mut self, peer: PeerId) {
-    self.send_message(
-      peer,
-      Message::new(
-        self.topic_config.name.clone(),
-        Action::Disconnect(Disconnect),
-      ),
-    );
+    if !self.pending_disconnects.insert(peer) {
+      self.send_message(
+        peer,
+        Message::new(
+          self.topic_config.name.clone(),
+          Action::Disconnect(Disconnect),
+        ),
+      );
+      self.move_active_to_passive(peer);
+    }
+  }
 
+  /// closes the link to the peer.
+  fn force_disconnect(&mut self, peer: PeerId, reason: &str) {
+    info!("disconnecting peer {peer} forcefully: {reason}");
     self
       .cmdtx
       .send(Command::Disconnect {
-        peer,
         topic: self.topic_config.name.clone(),
+        peer,
       })
       .expect("topic lifetime < network lifetime");
+    self.move_active_to_passive(peer);
   }
 
   fn dial(&mut self, addr: Multiaddr) {
-    self.pending_dials.insert(addr.clone());
-    self
-      .cmdtx
-      .send(Command::Connect {
-        addr,
-        topic: self.topic_config.name.clone(),
-      })
-      .expect("lifetime of network should be longer than topic");
+    if !self.pending_dials.insert(addr.clone()) {
+      self
+        .cmdtx
+        .send(Command::Connect {
+          addr,
+          topic: self.topic_config.name.clone(),
+        })
+        .expect("lifetime of network should be longer than topic");
+    }
   }
 
-  fn ban(&self, peer: PeerId) {
+  /// Have we dialed the node and still waiting for the connection
+  /// to be established?
+  fn is_pending_dial(&self, peer: &AddressablePeer) -> bool {
+    for addr in &peer.addresses {
+      if self.pending_dials.contains(addr) {
+        return true;
+      }
+    }
+    false
+  }
+
+  fn ban(&mut self, peer: PeerId, reason: &str) {
+    warn!(
+      "Peer {peer} banned on topic {}: {reason}",
+      self.topic_config.name
+    );
+
+    self.active_peers.remove(&peer);
+    self.remove_from_passive_view(peer);
+
     self
       .cmdtx
       .send(Command::BanPeer(peer))
@@ -419,8 +458,27 @@ impl TopicInner {
 
 // add/remove to/from views
 impl TopicInner {
+  /// Checks if a peer is already in the active view of this topic.
+  /// This is used to check if we need to send JOIN message when
+  /// the peer is dialed, peers that are active will not get
+  /// a JOIN request, otherwise the network will go into endless
+  /// join/forward churn.
+  fn is_active(&self, peer: &PeerId) -> bool {
+    self.active_peers.contains_key(peer)
+  }
+
+  /// Starved topics are ones where the active view
+  /// doesn't have a minimum set of nodes in it.
+  fn active_view_starved(&self) -> bool {
+    self.active_peers.len() < self.network_config.min_active_view_size()
+  }
+
+  /// Full topics are ones that have their active view full.
+  fn active_view_full(&self) -> bool {
+    self.active_peers.len() >= self.network_config.max_active_view_size()
+  }
+
   fn add_to_passive_view(&mut self, peer: AddressablePeer) {
-    self.remove_from_active_view(peer.peer_id);
     self.passive_peers.insert(peer.peer_id, peer.addresses);
 
     // if we've reached the passive view limit, remove a random node
@@ -438,14 +496,6 @@ impl TopicInner {
     self.passive_peers.remove(&peer);
   }
 
-  fn try_add_to_active_view(&mut self, peer: AddressablePeer) {
-    if !self.active_view_full() {
-      self.add_to_active_view(peer);
-    } else {
-      self.add_to_passive_view(peer);
-    }
-  }
-
   fn add_to_active_view(&mut self, peer: AddressablePeer) {
     if self.is_active(&peer.peer_id) {
       return;
@@ -455,24 +505,19 @@ impl TopicInner {
       return;
     }
 
+    info!(?peer, "added to active view");
+
     self
       .active_peers
       .insert(peer.peer_id, peer.addresses.clone());
 
     self.remove_from_passive_view(peer.peer_id);
-    self.pending_neighbours.insert(peer.peer_id);
-    for addr in peer.addresses {
-      // when it connects and is in pending_neighbours,
-      // then a NEIGHBOUR message will be sent. see the
-      // handle_peer_connected method.
-      self.dial(addr);
-    }
   }
 
-  fn remove_from_active_view(&mut self, peer: PeerId) {
-    if self.is_active(&peer) {
-      self.disconnect(peer);
-      self.active_peers.remove(&peer);
+  fn move_active_to_passive(&mut self, peer_id: PeerId) {
+    if let Some(addresses) = self.active_peers.remove(&peer_id) {
+      info!(?peer_id, "removed from active view");
+      self.add_to_passive_view(AddressablePeer { peer_id, addresses });
     }
   }
 
@@ -480,21 +525,51 @@ impl TopicInner {
   ///
   /// If the active view is not saturated, it will randomly pick a peer
   /// from the passive view and try to add it to the active view.
-  fn try_replenish_active_view(&mut self) {
-    if !self.active_view_full() {
-      if let Some(random) = self
-        .passive_peers
-        .values()
-        .choose(&mut thread_rng())
-        .cloned()
+  fn try_stabilize_active_view(&mut self) {
+    if self.active_view_starved()
+      && self.pending_dials.is_empty()
+      && self.pending_neighbours.is_empty()
+    {
+      if let Some(peer) =
+        self.passive_peers.iter().choose(&mut thread_rng()).map(
+          |(peer, addrs)| AddressablePeer {
+            peer_id: *peer,
+            addresses: addrs.clone(),
+          },
+        )
       {
-        for addr in random {
-          // dial the node and on connect,
-          // if still starving JOIN request will be sent
-          // see handle_peer_connected for more context.
-          self.dial(addr.clone());
+        self.initiate_neighbouring_with(peer);
+      } else if self.passive_peers.is_empty()
+        && self.active_peers.is_empty()
+        && self.pending_dials.is_empty()
+        && self.pending_joins.is_empty()
+      {
+        // this case occurs when we failed to establish
+        // a connection with any of the bootstrap nodes.
+        // retry dialing them and JOIN the topic.
+        //
+        // We don't know anything about the network yet,
+        // and this is the only bit of information that
+        // we can use to join it.
+        for addr in self.topic_config.bootstrap.clone() {
+          self.dial(addr);
         }
       }
+
+      increment_counter!("replenish_active_view");
+    } else if self
+      .active_peers
+      .len()
+      .gt(&self.network_config.max_active_view_size())
+    {
+      // active view is too large, prune a random connection
+      let random = *self
+        .active_peers
+        .keys()
+        .choose(&mut rand::thread_rng())
+        .expect("already checked that it is not empty");
+
+      self.disconnect(random);
     }
   }
 }
@@ -529,16 +604,13 @@ impl TopicInner {
       // Seems like an impersonation attempt
       // JOIN messages are not forwarded to
       // other peers as is.
-      self.ban(sender);
+      self.ban(sender, "JOIN impersonation");
       return;
     }
 
-    if self.active_peers.contains_key(&sender) {
+    if self.is_active(&sender) {
       return; // already joined
     }
-
-    // if not starving add to active, otherwise passive
-    self.try_add_to_active_view(msg.node.clone());
 
     // forward join to all active peers
     for peer in self.active_peers.keys() {
@@ -552,6 +624,15 @@ impl TopicInner {
           }),
         ),
       );
+    }
+
+    // remember this peer
+    self.add_to_passive_view(msg.node.clone());
+
+    // if our active view is not full, then
+    // start adding this peer to our active view
+    if !self.initiate_neighbouring_with(msg.node) {
+      self.disconnect(sender);
     }
   }
 
@@ -568,6 +649,12 @@ impl TopicInner {
   /// Nodes on the last hop MUST establish an active view with the initiator,
   /// even if they have to move one of their active connections to passive mode.
   fn consume_forward_join(&mut self, sender: PeerId, msg: ForwardJoin) {
+    // only active peers are allowed to send this message
+    if !self.is_active(&sender) {
+      self.force_disconnect(sender, "FORWARDJOIN not in active view");
+      return;
+    }
+
     increment_counter!(
       "received_forward_join",
       "topic" => self.topic_config.name.clone(),
@@ -577,8 +664,7 @@ impl TopicInner {
     if sender == msg.node.peer_id {
       // nodes may not send this message for themselves.
       // it has to be innitiated by another peer that received
-      // JOIN message.
-      self.ban(sender);
+      // JOIN message. It arrived via a cycle in the peer graph.
       return;
     }
 
@@ -587,53 +673,67 @@ impl TopicInner {
       return;
     }
 
-    // if last hop, must create active connection
-    if msg.hop == self.network_config.forward_join_hops_count {
-      if self.active_view_full() {
-        // our active view is full, need to free up a slot
-        let random = *self
-          .active_peers
-          .keys()
-          .choose(&mut rand::thread_rng())
-          .expect("already checked that it is not empty");
+    // we have learned about a new peer, add it to
+    // the passive view.
+    self.add_to_passive_view(msg.node.clone());
 
-        // move the unlucky node to passive view
-        self.add_to_passive_view(AddressablePeer {
-          peer_id: random,
-          addresses: self
+    // if last hop, must create active connection
+    if msg.hop as usize >= self.network_config.max_hops_count() {
+      if !self.pending_neighbours.insert(msg.node.peer_id) {
+        if self.active_view_full() {
+          // our active view is full, need to free up a slot
+          let random = *self
             .active_peers
-            .get(&random)
-            .expect("chosen by random from existing values")
-            .clone(),
-        });
+            .keys()
+            .choose(&mut rand::thread_rng())
+            .expect("already checked that it is not empty");
+
+          // move the unlucky node to passive view
+          self.add_to_passive_view(AddressablePeer {
+            peer_id: random,
+            addresses: self
+              .active_peers
+              .get(&random)
+              .expect("chosen by random from existing values")
+              .clone(),
+          });
+        }
+
+        for addr in msg.node.addresses {
+          self.dial(addr);
+        }
       }
     } else {
       for peer in self.active_peers.keys() {
-        self.send_message(
-          *peer,
-          Message::new(
-            self.topic_config.name.clone(),
-            Action::ForwardJoin(ForwardJoin {
-              hop: msg.hop + 1,
-              node: msg.node.clone(),
-            }),
-          ),
-        )
+        if *peer != sender {
+          self.send_message(
+            *peer,
+            Message::new(
+              self.topic_config.name.clone(),
+              Action::ForwardJoin(ForwardJoin {
+                hop: msg.hop + 1,
+                node: msg.node.clone(),
+              }),
+            ),
+          );
+        }
       }
     }
-
-    self.try_add_to_active_view(msg.node);
   }
 
   /// Handles NEIGHBOR messages.
   ///
   /// This message is send when a node wants to establish an active connection
-  /// with the receiving node. This message is sent as a response to JOIN and
+  /// with the current node. This message is sent as a response to JOIN and
   /// FORWARDJOIN messages initiated by the peer wanting to join the overlay.
   ///
   /// This message is also sent to nodes that are being moved from passive view
   /// to the active view.
   fn consume_neighbor(&mut self, sender: PeerId, msg: Neighbour) {
+    if self.is_active(&sender) {
+      return;
+    }
+
     increment_counter!(
       "received_neighbor",
       "topic" => self.topic_config.name.clone()
@@ -641,13 +741,16 @@ impl TopicInner {
 
     if sender != msg.peer.peer_id {
       // impersonation attempt. ban sender
-      self.ban(sender);
+      self.ban(sender, "NEIGHBOUR impersonation");
       return;
     }
 
-    self.pending_joins.remove(&sender);
-    self.pending_joins.remove(&msg.peer.peer_id);
-
+    // SECURITY:
+    // an attack vector here could be through sybil attack
+    // where someone creates many identities and sends
+    // many NEIGHBOUR requests with high priority
+    // and surrounds a node by taking all its active
+    // peer slots.
     if self.active_view_full() && msg.high_priority {
       // our active view is full, need to free up a slot
       let random = *self
@@ -655,7 +758,7 @@ impl TopicInner {
         .keys()
         .choose(&mut rand::thread_rng())
         .expect("already checked that it is not empty");
-      self.remove_from_active_view(random);
+      self.disconnect(random);
     }
 
     if !self.active_view_full() {
@@ -663,8 +766,6 @@ impl TopicInner {
     } else {
       self.disconnect(sender);
     }
-
-    self.try_replenish_active_view();
   }
 
   /// Handles DISCONNECT messages.
@@ -678,6 +779,14 @@ impl TopicInner {
       "topic" => self.topic_config.name.clone()
     );
 
+    // cancell all pending operations, except JOIN
+    // so we won't spam any node (especially bootstrap)
+    // with many repeated JOIN requests while FORWARDJOIN
+    // is in progress.
+    self.pending_neighbours.remove(&sender);
+    self.pending_shuffle_replies.remove(&sender);
+    self.move_active_to_passive(sender);
+
     self
       .cmdtx
       .send(Command::Disconnect {
@@ -685,8 +794,6 @@ impl TopicInner {
         peer: sender,
       })
       .expect("topic lifetime < network lifetime");
-
-    self.try_replenish_active_view();
   }
 
   /// Handles SHUFFLE messages.
@@ -705,7 +812,13 @@ impl TopicInner {
   /// Each node that receives a SHUFFLE message that replies with SHUFFLEREPLY
   /// with a sample of its own active and passive nodes that were not present
   /// in the SHUFFLE message.
-  fn consume_shuffle(&mut self, _sender: PeerId, msg: Shuffle) {
+  fn consume_shuffle(&mut self, sender: PeerId, msg: Shuffle) {
+    // only active peers are allowed to send this, otherwise
+    // its a protocol violation.
+    if !self.is_active(&sender) {
+      return;
+    }
+
     increment_counter!(
       "received_shuffle",
       "topic" => self.topic_config.name.clone(),
@@ -819,23 +932,23 @@ impl TopicInner {
 
     // forward the shuffle message until
     // hop count reaches shuffle max hops
-    if msg.hop < self.network_config.shuffle_hops_count {
+    if (msg.hop as usize) < self.network_config.max_hops_count() {
       for peer in self.active_peers.keys() {
-        self.send_message(
-          *peer,
-          Message::new(
-            self.topic_config.name.clone(),
-            Action::Shuffle(Shuffle {
-              hop: msg.hop + 1,
-              origin: msg.origin.clone(),
-              peers: msg.peers.clone(),
-            }),
-          ),
-        )
+        if *peer != sender {
+          self.send_message(
+            *peer,
+            Message::new(
+              self.topic_config.name.clone(),
+              Action::Shuffle(Shuffle {
+                hop: msg.hop + 1,
+                origin: msg.origin.clone(),
+                peers: msg.peers.clone(),
+              }),
+            ),
+          )
+        }
       }
     }
-
-    self.try_replenish_active_view();
   }
 
   /// Handles SHUFFLEREPLY messages.
@@ -894,8 +1007,6 @@ impl TopicInner {
         )
       })
       .collect();
-
-    self.try_replenish_active_view();
   }
 
   /// Invoked when a content is gossiped to this node.
@@ -903,19 +1014,63 @@ impl TopicInner {
   /// Those messages are emitted to listeners on this topic events.
   /// The message id is a randomly generated identifier by the originating
   /// node and is used to ignore duplicate messages.
-  fn consume_gossip(&mut self, _sender: PeerId, msg: Bytes) {
+  fn consume_gossip(&mut self, sender: PeerId, msg: Bytes) {
+    // only active peers are allowed to send this message.
+    if !self.is_active(&sender) {
+      self.force_disconnect(sender, "GOSSIP not in active view");
+      return;
+    }
     gauge!(
       "gossip_size", msg.len() as f64,
       "topic" => self.topic_config.name.clone());
     increment_counter!(
-      "messags_consumed",
+      "gossip_count",
       "topic" => self.topic_config.name.clone());
 
-    self.outmsgs.send(msg);
+    self.outmsgs.send(msg.clone());
+
+    for peer in self.active_peers.keys() {
+      if *peer != sender {
+        self.send_message(
+          *peer,
+          Message::new(
+            self.topic_config.name.clone(),
+            Action::Gossip(msg.clone()),
+          ),
+        );
+      }
+    }
   }
 }
 
 impl TopicInner {
+  /// Begins the process of adding a peer to the active view. First it
+  /// marks the peer as "pending neighbouring" and then dials into the peer,
+  /// so when the connection eventually gets established, we will send it a
+  /// NEIGHBOUR message and add it to the active view.
+  ///
+  /// returns true if the neigbouring process was initiated, otherwise returns
+  /// false if another similar process is in progress and have not completed
+  /// or failed.
+  fn initiate_neighbouring_with(&mut self, peer: AddressablePeer) -> bool {
+    // make sure it's not alread an active peer and we're not in the middle of
+    // dialing this peer
+    if self.is_active(&peer.peer_id) || self.is_pending_dial(&peer) {
+      return false;
+    }
+
+    // make sure that we haven't already started neighbouring
+    // with this peer.
+    if !self.pending_neighbours.insert(peer.peer_id) {
+      // dial on all known addresses of this peer
+      for addr in peer.addresses {
+        self.dial(addr.clone());
+      }
+      return true;
+    }
+    false
+  }
+
   fn initiate_shuffle(&mut self) {
     self.last_shuffle = Instant::now();
 

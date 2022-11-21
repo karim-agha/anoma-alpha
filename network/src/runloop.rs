@@ -8,7 +8,7 @@ use {
   },
   futures::StreamExt,
   libp2p::{
-    core::upgrade::Version,
+    core::{transport::timeout::TransportTimeout, upgrade::Version},
     dns::TokioDnsConfig,
     identity::Keypair,
     noise::{self, NoiseConfig, X25519Spec},
@@ -102,7 +102,8 @@ fn build_swarm(
     let noise_keys =
       noise::Keypair::<X25519Spec>::new().into_authentic(&keypair)?;
 
-    transport
+    // use network-wide timeout
+    TransportTimeout::new(transport, config.pending_timeout)
       .upgrade(Version::V1)
       .authenticate(NoiseConfig::xx(noise_keys).into_authenticated())
       .multiplex(YamuxConfig::default())

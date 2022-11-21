@@ -2,7 +2,7 @@ mod behaviour;
 mod channel;
 mod codec;
 mod config;
-mod history;
+mod cache;
 mod network;
 mod runloop;
 mod stream;

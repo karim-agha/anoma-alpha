@@ -33,17 +33,17 @@ async fn main() -> anyhow::Result<()> {
     bootstrap: opts.peers(),
   })?;
 
-  tokio::spawn({
-    let intents = intents_topic.clone();
+  // tokio::spawn({
+  //   let intents = intents_topic.clone();
 
-    async move {
-      loop {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        let bytes = [1u8, 2, 3]; // test deduplication
-        intents.gossip(bytes.to_vec().into());
-      }
-    }
-  });
+  //   async move {
+  //     loop {
+  //       tokio::time::sleep(Duration::from_secs(2)).await;
+  //       let bytes = [1u8, 2, 3]; // test deduplication
+  //       intents.gossip(bytes.to_vec().into());
+  //     }
+  //   }
+  // });
 
   tokio::spawn(async move {
     let mut intents_topic = intents_topic;
@@ -61,17 +61,18 @@ async fn main() -> anyhow::Result<()> {
     bootstrap: opts.peers(),
   })?;
 
-  tokio::spawn({
-    let transactions = transactions_topic.clone();
+  // tokio::spawn({
+  //   let transactions = transactions_topic.clone();
 
-    async move {
-      loop {
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        let bytes: [u8; 10] = rand::random(); // no duplicates
-        transactions.gossip(bytes.to_vec().into());
-      }
-    }
-  });
+  //   async move {
+  //     let mut counter = 1u64;
+  //     loop {
+  //       tokio::time::sleep(Duration::from_secs(2)).await;
+  //       transactions.gossip(counter.to_be_bytes().to_vec().into());
+  //       counter += 1;
+  //     }
+  //   }
+  // });
 
   tokio::spawn(async move {
     let mut transactions_topic = transactions_topic;
