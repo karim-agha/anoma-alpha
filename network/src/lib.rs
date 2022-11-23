@@ -1,8 +1,9 @@
 mod behaviour;
+mod cache;
 mod channel;
 mod codec;
 mod config;
-mod cache;
+mod muxer;
 mod network;
 mod runloop;
 mod stream;

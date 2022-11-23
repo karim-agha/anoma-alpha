@@ -116,10 +116,6 @@ pub struct ShuffleReply {
   pub peers: HashSet<AddressablePeer>,
 }
 
-/// Instructs a peer to end an active connection with the local node.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Disconnect;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Action {
   Join(Join),
@@ -127,7 +123,6 @@ pub enum Action {
   Neighbour(Neighbour),
   Shuffle(Shuffle),
   ShuffleReply(ShuffleReply),
-  Disconnect(Disconnect),
   Gossip(Bytes),
 }
 

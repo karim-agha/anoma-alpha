@@ -9,6 +9,7 @@ use {
     core::{connection::ConnectionId, transport::ListenerId, ConnectedPoint},
     multiaddr::Protocol,
     swarm::{
+      CloseConnection,
       NetworkBehaviour,
       NetworkBehaviourAction,
       NotifyHandler,
@@ -44,6 +45,8 @@ pub(crate) enum Event {
 
     /// Address and identity of the remote peer.
     peer: AddressablePeer,
+
+    connection_id: ConnectionId,
   },
 
   /// Emitted when a connection is closed between two peers.
@@ -51,15 +54,16 @@ pub(crate) enum Event {
   /// This is emitted when the last HyparView overlay between the two
   /// peers is destroyed and they have no common topics anymore. Also
   /// emitted when the connection is dropped due to transport layer failure.
-  ConnectionClosed(PeerId),
+  ConnectionClosed(PeerId, ConnectionId),
 
   /// Emitted when a message is received on the wire from a connected peer.
-  MessageReceived(PeerId, Message),
+  MessageReceived(PeerId, ConnectionId, Message),
 }
 
 pub(crate) struct Behaviour {
   config: Config,
   events: Channel<Event>,
+  disconnects: Channel<(PeerId, ConnectionId)>,
   outmsgs: Channel<(PeerId, Message)>,
 }
 
@@ -69,11 +73,16 @@ impl Behaviour {
       config,
       events: Channel::new(),
       outmsgs: Channel::new(),
+      disconnects: Channel::new(),
     }
   }
 
   pub fn send_to(&self, peer: PeerId, msg: Message) {
     self.outmsgs.send((peer, msg));
+  }
+
+  pub fn disconnect_from(&self, peer: PeerId, connection: ConnectionId) {
+    self.disconnects.send((peer, connection));
   }
 }
 
@@ -92,32 +101,30 @@ impl NetworkBehaviour for Behaviour {
     event: Message,
   ) {
     debug!("injecting event from {peer_id:?} [conn {connection:?}]: {event:?}");
-    self.events.send(Event::MessageReceived(peer_id, event));
+    self
+      .events
+      .send(Event::MessageReceived(peer_id, connection, event));
   }
 
   /// Informs the behaviour about a newly established connection to a peer.
   fn inject_connection_established(
     &mut self,
     peer_id: &PeerId,
-    _: &ConnectionId,
+    connection_id: &ConnectionId,
     endpoint: &ConnectedPoint,
     _: Option<&Vec<Multiaddr>>,
-    other_established: usize,
+    _: usize,
   ) {
-    // signal only if it is the first connection to this peer,
-    // otherwise it will be immediately closed by libp2p as it
-    // will exceed the maximum allowed connections between peers (1).s
-    if other_established == 0 {
-      self.events.send(Event::ConnectionEstablished {
-        dialer: matches!(endpoint, ConnectedPoint::Dialer { .. }),
-        peer: AddressablePeer {
-          peer_id: *peer_id,
-          addresses: [endpoint.get_remote_address().clone()]
-            .into_iter()
-            .collect(),
-        },
-      });
-    }
+    self.events.send(Event::ConnectionEstablished {
+      connection_id: *connection_id,
+      dialer: matches!(endpoint, ConnectedPoint::Dialer { .. }),
+      peer: AddressablePeer {
+        peer_id: *peer_id,
+        addresses: [endpoint.get_remote_address().clone()]
+          .into_iter()
+          .collect(),
+      },
+    });
   }
 
   /// Informs the behaviour about a closed connection to a peer.
@@ -128,14 +135,14 @@ impl NetworkBehaviour for Behaviour {
   fn inject_connection_closed(
     &mut self,
     peerid: &PeerId,
-    _: &ConnectionId,
+    connection_id: &ConnectionId,
     _: &ConnectedPoint,
     _: SubstreamHandler,
-    remaining_established: usize,
+    _: usize,
   ) {
-    if remaining_established == 0 {
-      self.events.send(Event::ConnectionClosed(*peerid));
-    }
+    self
+      .events
+      .send(Event::ConnectionClosed(*peerid, *connection_id));
   }
 
   fn inject_new_listen_addr(&mut self, _: ListenerId, addr: &Multiaddr) {
@@ -155,6 +162,16 @@ impl NetworkBehaviour for Behaviour {
     // propagate any generated events to the network API.
     if let Poll::Ready(Some(event)) = self.events.poll_recv(cx) {
       return Poll::Ready(NetworkBehaviourAction::GenerateEvent(event));
+    }
+
+    if let Poll::Ready(Some((peer_id, connection))) =
+      self.disconnects.poll_recv(cx)
+    {
+      tracing::info!(?peer_id, ?connection, "behaviour poll disconnects");
+      return Poll::Ready(NetworkBehaviourAction::CloseConnection {
+        peer_id,
+        connection: CloseConnection::One(connection),
+      });
     }
 
     // Send next message from outbound queue by forwarding it to the

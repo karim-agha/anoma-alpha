@@ -10,7 +10,6 @@ use {
     wire::{
       Action,
       AddressablePeer,
-      Disconnect,
       ForwardJoin,
       Join,
       Message,
@@ -58,7 +57,7 @@ pub enum Event {
   MessageReceived(PeerId, Message),
   LocalAddressDiscovered(Multiaddr),
   PeerConnected(AddressablePeer),
-  PeerDisconnected(PeerId, bool), // (peer, graceful)
+  PeerDisconnected(PeerId),
   Tick,
 }
 
@@ -226,8 +225,8 @@ impl Topic {
       Event::PeerConnected(peer) => {
         inner.handle_peer_connected(peer);
       }
-      Event::PeerDisconnected(peer, gracefully) => {
-        inner.handle_peer_disconnected(peer, gracefully);
+      Event::PeerDisconnected(peer) => {
+        inner.handle_peer_disconnected(peer);
       }
       Event::MessageReceived(peer, msg) => {
         inner.handle_message_received(peer, msg);
@@ -250,11 +249,16 @@ impl TopicInner {
       Action::Neighbour(n) => self.consume_neighbor(sender, n),
       Action::Shuffle(s) => self.consume_shuffle(sender, s),
       Action::ShuffleReply(sr) => self.consume_shuffle_reply(sender, sr),
-      Action::Disconnect(d) => self.consume_disconnect(sender, d),
       Action::Gossip(b) => self.consume_gossip(sender, b),
     }
   }
 
+  /// This gets invoked after a connection is established with a remote peer
+  /// that was dialed specifically to send them NEIGHBOUR message and form an
+  /// active connection with them.
+  ///
+  /// Peers in this collection will not be sent JOIN or any other messages that
+  /// are sent to newly connected peers.
   fn handle_pending_neighbours(&mut self, peer: &AddressablePeer) {
     if self.pending_neighbours.remove(&peer.peer_id) {
       self.send_message(
@@ -271,6 +275,14 @@ impl TopicInner {
     }
   }
 
+  /// This gets invoked after a connection is established with a remote peer
+  /// that was dialed specifically to send them SHUFFLE message after a shuffle
+  /// initiated by them was forwarded to the current node.
+  ///
+  /// Peers in this collection will not be sent JOIN or any other messages that
+  /// are sent to newly connected peers. After respnding to the shuffle, the
+  /// connection gets closed (unless they were already part of the active
+  /// set on the current node).
   fn handle_pending_shuffle_replies(&mut self, peer: &AddressablePeer) {
     if let Some(reply) = self.pending_shuffle_replies.remove(&peer.peer_id) {
       // this peer originated a shuffle operation and this
@@ -340,7 +352,7 @@ impl TopicInner {
     }
   }
 
-  fn handle_peer_disconnected(&mut self, peer: PeerId, _: bool) {
+  fn handle_peer_disconnected(&mut self, peer: PeerId) {
     self.move_active_to_passive(peer);
     self.pending_neighbours.remove(&peer);
     self.pending_shuffle_replies.remove(&peer);
@@ -383,23 +395,8 @@ impl TopicInner {
 }
 
 impl TopicInner {
-  /// Initiates a graceful disconnect from an active peer.
   fn disconnect(&mut self, peer: PeerId) {
-    if !self.pending_disconnects.insert(peer) {
-      self.send_message(
-        peer,
-        Message::new(
-          self.topic_config.name.clone(),
-          Action::Disconnect(Disconnect),
-        ),
-      );
-      self.move_active_to_passive(peer);
-    }
-  }
-
-  /// closes the link to the peer.
-  fn force_disconnect(&mut self, peer: PeerId, reason: &str) {
-    info!("disconnecting peer {peer} forcefully: {reason}");
+    tracing::info!(?self.topic_config.name, ?peer, "topic disconnecting");
     self
       .cmdtx
       .send(Command::Disconnect {
@@ -407,7 +404,6 @@ impl TopicInner {
         peer,
       })
       .expect("topic lifetime < network lifetime");
-    self.move_active_to_passive(peer);
   }
 
   fn dial(&mut self, addr: Multiaddr) {
@@ -611,7 +607,7 @@ impl TopicInner {
     if self.is_active(&sender) {
       return; // already joined
     }
-
+    
     // forward join to all active peers
     for peer in self.active_peers.keys() {
       self.send_message(
@@ -651,7 +647,7 @@ impl TopicInner {
   fn consume_forward_join(&mut self, sender: PeerId, msg: ForwardJoin) {
     // only active peers are allowed to send this message
     if !self.is_active(&sender) {
-      self.force_disconnect(sender, "FORWARDJOIN not in active view");
+      self.disconnect(sender);
       return;
     }
 
@@ -678,7 +674,7 @@ impl TopicInner {
     self.add_to_passive_view(msg.node.clone());
 
     // if last hop, must create active connection
-    if msg.hop as usize >= self.network_config.max_hops_count() {
+    if msg.hop as usize >= self.network_config.random_walk_length() {
       if !self.pending_neighbours.insert(msg.node.peer_id) {
         if self.active_view_full() {
           // our active view is full, need to free up a slot
@@ -766,34 +762,6 @@ impl TopicInner {
     } else {
       self.disconnect(sender);
     }
-  }
-
-  /// Handles DISCONNECT messages.
-  ///
-  /// Nodes receiving this message are informed that the sender is removing
-  /// them from their active view. Which also means that the sender should
-  /// also be removed from the receiving node's active view.
-  fn consume_disconnect(&mut self, sender: PeerId, _: Disconnect) {
-    increment_counter!(
-      "received_disconnect",
-      "topic" => self.topic_config.name.clone()
-    );
-
-    // cancell all pending operations, except JOIN
-    // so we won't spam any node (especially bootstrap)
-    // with many repeated JOIN requests while FORWARDJOIN
-    // is in progress.
-    self.pending_neighbours.remove(&sender);
-    self.pending_shuffle_replies.remove(&sender);
-    self.move_active_to_passive(sender);
-
-    self
-      .cmdtx
-      .send(Command::Disconnect {
-        topic: self.topic_config.name.clone(),
-        peer: sender,
-      })
-      .expect("topic lifetime < network lifetime");
   }
 
   /// Handles SHUFFLE messages.
@@ -932,7 +900,7 @@ impl TopicInner {
 
     // forward the shuffle message until
     // hop count reaches shuffle max hops
-    if (msg.hop as usize) < self.network_config.max_hops_count() {
+    if (msg.hop as usize) < self.network_config.random_walk_length() {
       for peer in self.active_peers.keys() {
         if *peer != sender {
           self.send_message(
@@ -1017,9 +985,10 @@ impl TopicInner {
   fn consume_gossip(&mut self, sender: PeerId, msg: Bytes) {
     // only active peers are allowed to send this message.
     if !self.is_active(&sender) {
-      self.force_disconnect(sender, "GOSSIP not in active view");
+      self.disconnect(sender);
       return;
     }
+
     gauge!(
       "gossip_size", msg.len() as f64,
       "topic" => self.topic_config.name.clone());

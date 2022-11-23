@@ -8,11 +8,15 @@ use {
   },
   futures::StreamExt,
   libp2p::{
-    core::{transport::timeout::TransportTimeout, upgrade::Version},
+    core::{
+      connection::ConnectionId,
+      transport::timeout::TransportTimeout,
+      upgrade::Version,
+    },
     dns::TokioDnsConfig,
     identity::Keypair,
     noise::{self, NoiseConfig, X25519Spec},
-    swarm::{ConnectionLimits, SwarmBuilder, SwarmEvent},
+    swarm::{SwarmBuilder, SwarmEvent},
     tcp::{GenTcpConfig, TokioTcpTransport},
     yamux::YamuxConfig,
     Multiaddr,
@@ -25,7 +29,7 @@ use {
     sync::mpsc::{UnboundedReceiver, UnboundedSender},
     task::JoinHandle,
   },
-  tracing::{error, warn},
+  tracing::error,
 };
 
 /// Low-level network commands.
@@ -49,7 +53,7 @@ pub enum Command {
   ///
   /// First it will decrement the recount on a connection with
   /// the peer, and if it reaches zero then the connection gets closed.
-  Disconnect(PeerId),
+  Disconnect(PeerId, ConnectionId),
 
   /// Bans a peer from connecting to this node.
   ///
@@ -96,7 +100,7 @@ fn build_swarm(
   // substream multiplexing.
   let transport = {
     let transport = TokioDnsConfig::system(TokioTcpTransport::new(
-      GenTcpConfig::new().port_reuse(true).nodelay(true),
+      GenTcpConfig::new().port_reuse(false).nodelay(true),
     ))?;
 
     let noise_keys =
@@ -120,11 +124,6 @@ fn build_swarm(
     .executor(Box::new(|f| {
       tokio::spawn(f);
     }))
-    // If multiple topics have overlapping nodes, 
-    // maintain only one connection between peers.
-    .connection_limits(
-      ConnectionLimits::default().with_max_established_per_peer(Some(1)),
-    )
     .build(),
   )
 }
@@ -171,10 +170,8 @@ fn start_network_runloop(
                 error!("Failed to dial peer: {err:?}");
               }
             }
-            Command::Disconnect(peer) => {
-              if let Err(()) = swarm.disconnect_peer_id(peer) {
-                warn!("trying to disconnect from an unknown peer");
-              }
+            Command::Disconnect(peer, connection) => {
+              swarm.behaviour().disconnect_from(peer, connection);
             }
             Command::SendMessage { peer, msg } => {
               increment_counter!(

@@ -98,7 +98,7 @@ impl Config {
     self.max_active_view_size() * self.passive_view_factor
   }
 
-  pub fn max_hops_count(&self) -> usize {
+  pub fn random_walk_length(&self) -> usize {
     (self.network_size as f64).log10().ceil() as usize
   }
 }

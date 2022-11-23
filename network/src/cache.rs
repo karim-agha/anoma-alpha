@@ -4,7 +4,7 @@ use std::{
   time::{Duration, Instant},
 };
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct Timestamped<T>(T, Instant);
 
 impl<T> Eq for Timestamped<T> {}
@@ -20,6 +20,7 @@ impl<T> PartialOrd for Timestamped<T> {
   }
 }
 
+#[derive(Debug)]
 pub struct ExpiringMap<K, V>
 where
   K: Eq + Hash,
@@ -65,6 +66,16 @@ impl<K: Eq + Hash, V> ExpiringMap<K, V> {
     None
   }
 
+  pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+    if let Some(value) = self.data.get_mut(key) {
+      if value.1.elapsed() > self.lifespan {
+        return None;
+      }
+      return Some(&mut value.0);
+    }
+    None
+  }
+
   pub fn contains_key(&self, key: &K) -> bool {
     self.get(key).is_some()
   }
@@ -80,10 +91,11 @@ impl<K: Eq + Hash, V> ExpiringMap<K, V> {
   }
 
   pub fn prune_expired(&mut self) {
-    self.data.retain(|_, v| v.1.elapsed() > self.lifespan);
+    self.data.retain(|_, v| v.1.elapsed() < self.lifespan);
   }
 }
 
+#[derive(Debug)]
 pub struct ExpiringSet<T>
 where
   T: Eq + Hash,

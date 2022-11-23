@@ -3,6 +3,7 @@ use {
     behaviour,
     cache::ExpiringSet,
     channel::Channel,
+    muxer::Muxer,
     runloop::{self, Runloop},
     topic::{self, Event, Topic},
     wire::{AddressablePeer, Message},
@@ -10,6 +11,7 @@ use {
   },
   futures::{Stream, StreamExt},
   libp2p::{
+    core::connection::ConnectionId,
     identity::Keypair,
     noise::NoiseError,
     Multiaddr,
@@ -19,10 +21,9 @@ use {
   metrics::{gauge, increment_counter},
   multihash::Multihash,
   std::{
-    collections::{hash_map::Entry, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     pin::Pin,
     task::{Context, Poll},
-    time::Instant,
   },
   thiserror::Error,
   tokio::time::{interval, Interval},
@@ -105,7 +106,7 @@ pub struct Network {
 
   /// Used to track pending and active connections to peers
   /// and refcount them by the number of topics using a connection.
-  connections: ConnectionTracker,
+  muxer: Muxer,
 
   /// If message deduplication is turned on in config, this struct will
   /// store recent messages that were received by this node to ignore
@@ -132,8 +133,8 @@ impl Network {
     let commands = Channel::new();
     Ok(Self {
       topics: HashMap::new(),
+      muxer: Muxer::new(&config),
       tick: interval(config.tick_interval),
-      connections: ConnectionTracker::new(),
       history: config.dedupe_interval.map(ExpiringSet::new),
       runloop: Runloop::new(&config, keypair, commands.sender())?,
       this: AddressablePeer {
@@ -188,15 +189,8 @@ impl Network {
   pub async fn runloop(mut self) {
     while let Some(()) = self.next().await {
       // metrics & observability
-      gauge!(
-        "connected_peers",
-        self.connections.open_connections_count() as f64
-      );
-
-      gauge!(
-        "pending_peers",
-        self.connections.pending_connections_count() as f64
-      );
+      gauge!("connected_peers", self.muxer.assigned_count() as f64);
+      gauge!("pending_peers", self.muxer.unassigned_count() as f64);
     }
   }
 }
@@ -211,125 +205,73 @@ impl Network {
   /// Invoked by topics when they are attempting to establish
   /// a new active connection with some peer who's identity is
   /// not known yet but we know its address.
-  ///
-  /// If peers are trying to connect to a node that we already
-  /// have a connection to (like other topics have it in their
-  /// active view), then it increments the refcount on that
-  /// connection.
   fn begin_connect(&mut self, addr: Multiaddr, topic: String) {
-    if !self.connections.connected(&addr) {
-      // need to first establish a physical connection with the peer
-      self.connections.add_pending_dial(addr.clone(), topic);
+    self.muxer.put_dial(addr.clone(), topic);
+
+    if self.muxer.next_dial(&addr) {
       self.runloop.send_command(runloop::Command::Connect(addr));
-    } else {
-      // peer already connected, emit an event to the topic that
-      // a connection has been established with the peer.
-      let peer =
-        self.connections.get_peer_by_addr(&addr).unwrap_or_else(|| {
-          panic!(
-            "Bug in connection tracker. It thinks that address {addr:?} is \
-             connected but cannot map it to a peer id."
-          )
-        });
-
-      self // track this connection refcount
-        .connections
-        .add_connection(peer.peer_id, &topic);
-
-      let topic = self.topics.get_mut(&topic).unwrap_or_else(|| {
-        panic!(
-          "Bug in topics tracker. Trying to establish connection with peer \
-           {peer:?} from a topic that is not joined: {topic}"
-        )
-      });
-      topic.inject_event(Event::PeerConnected(peer));
     }
   }
 
   /// Invoked by the background network runloop when a connection
   /// is established with a peer and its identity is known.
-  fn complete_connect(&mut self, peer: AddressablePeer, dialer: bool) {
+  fn complete_connect(
+    &mut self,
+    peer: AddressablePeer,
+    connection: ConnectionId,
+    dialer: bool,
+  ) {
     if dialer {
-      increment_counter!("dials_outgoing");
-      for topic in self.connections.get_pending_dials(&peer) {
-        self.connections.add_connection(peer.peer_id, &topic);
-        self.connections.remove_pending_dial(&peer, &topic);
+      // local node initiated the connection, we know which topic(s)
+      // called into this peer and we can resolve it right away.
+      increment_counter!("dials_outbound");
+      if let Some(topic) = self.muxer.match_dial(&peer, connection) {
         let topic = self.topics.get_mut(&topic).unwrap_or_else(|| {
-          panic!(
-            "Bug in topics tracker. Nonexistant {topic} pending connect \
-             {peer:?} from a topic that is not joined: {topic}"
-          )
+          panic!("bug: dialed a peer on a topic not joined by local node");
         });
         topic.inject_event(Event::PeerConnected(peer.clone()));
+      } else {
+        unreachable!("bug: a dialed address is not tracked by the muxer");
+      }
+
+      for addr in peer.addresses {
+        if self.muxer.next_dial(&addr) {
+          self.runloop.send_command(runloop::Command::Connect(addr));
+          break;
+        }
       }
     } else {
-      increment_counter!("dials_incoming");
-      self.connections.add_pending_connection(peer);
+      // remote peer initiated the connection, we still don't know
+      // which topic is used for this connection, the first message
+      // received on this connection will reveal the topic.
+      increment_counter!("dials_inbound");
+      self.muxer.register(peer, connection)
     }
   }
 
+  /// invoked when this node initiated a disconnect from a remote peer
   fn begin_disconnect(&mut self, peer: PeerId, topic: String) {
-    if let Some(refcount) = self.connections.remove_connection(peer, &topic) {
-      if refcount == 0 {
-        // this was the last topic that disconnected from this peer, close the
-        // connection and on successfull close of the link signal that to the
-        // topic.
-        self.connections.add_pending_disconnect(peer, topic);
-        self
-          .runloop
-          .send_command(runloop::Command::Disconnect(peer))
-      } else {
-        // other topics are still connected to this peer, in that case
-        // the link between peers will not be closed, instead we just
-        // signal to the topic that its disconnected and decrement the
-        // refcount.
+    let connection = self
+      .muxer
+      .resolve_connection(&peer, &topic)
+      .expect("bug: disconnecting from an untracked connection");
 
-        let topic = self.topics.get_mut(&topic).unwrap_or_else(|| {
-          panic!(
-            "Bug in topic tracker. Attempting to disconnect peer {peer} from \
-             an unknown topic {topic}"
-          );
-        });
-
-        topic.inject_event(Event::PeerDisconnected(peer, true));
-      }
-    }
+    self
+      .runloop
+      .send_command(runloop::Command::Disconnect(peer, *connection));
   }
 
   /// This happens when the last topic on this node requests a connection to a
   /// peer to be closed, or the remote peer abruptly closes the TCP link.
-  fn complete_disconnect(&mut self, peer: PeerId) {
-    // emit event for the peer that closed the physical link
-    if let Some(pending) = self.connections.take_pending_disconnect(&peer) {
-      self
+  fn complete_disconnect(&mut self, peer: PeerId, connection: ConnectionId) {
+    if let Some(topic) = self.muxer.resolve_topic(&peer, &connection) {
+      let topic = self
         .topics
-        .get_mut(&pending)
-        .unwrap_or_else(|| {
-          panic!(
-            "Bug in connection tracker. Unknown topic {pending} is waiting \
-             for peer {peer} to disconnect"
-          );
-        })
-        .inject_event(Event::PeerDisconnected(peer, true));
-    }
-
-    // Emit disconnect events for all topics connected to this peer.
-    // This happens when the link is lost because the remote peer disconnected
-    // for whatever reason including TCP errors, bans, etc and we still have
-    // topics that think that they are connected to it.
-    if let Some(topics) = self.connections.remove_all_connections(peer) {
-      for topic in topics {
-        self
-          .topics
-          .get_mut(&topic)
-          .unwrap_or_else(|| {
-            panic!(
-              "Bug in connection tracker. Unknown topic {topic} thinks that \
-               it is connected to peer {peer}"
-            );
-          })
-          .inject_event(Event::PeerDisconnected(peer, false));
-      }
+        .get_mut(topic)
+        .expect("resolve would return None");
+      topic.inject_event(Event::PeerDisconnected(peer));
+    } else {
+      tracing::info!(?peer, "disconnected from unknown topic");
     }
   }
 
@@ -342,7 +284,12 @@ impl Network {
     }
   }
 
-  fn accept_message(&mut self, from: PeerId, msg: Message) {
+  fn accept_message(
+    &mut self,
+    from: PeerId,
+    connection: ConnectionId,
+    msg: Message,
+  ) {
     increment_counter!(
       "messages_received",
       "peer" => from.to_base58(),
@@ -362,22 +309,31 @@ impl Network {
       }
     }
 
-    if let Some(topic) = self.topics.get_mut(&msg.topic) {
-      // If this is the first message from a peer that dialed us,
-      // on this topic, then signal that it has connected to the
-      // relevant topic
-      if let Some(peer) = self
-        .connections
-        .try_move_pending_connection(from, &msg.topic)
-      {
+    // if first message on this topic from this peer:
+    if let Some(peer) = self.muxer.assign(from, connection, &msg.topic) {
+      // this is the first message to a topic on this connection,
+      // it was successfully assigned, and we know the
+      // peer -> connectionid -> topic mapping.
+      // signal to the topic that a peer was connected before
+      // routing any messages
+      if let Some(topic) = self.topics.get_mut(&msg.topic) {
         topic.inject_event(topic::Event::PeerConnected(peer));
+      } else {
+        // a peer is sending message on an unrecognized topic
+        // this is a protocol violation.
+        self.ban_peer(from);
+        return;
       }
+    }
 
-      // route message to appropriate topic
-      topic.inject_event(topic::Event::MessageReceived(from, msg));
+    if let Some(topic) = self.muxer.resolve_topic(&from, &connection) {
+      if let Some(topic) = self.topics.get_mut(topic) {
+        topic.inject_event(topic::Event::MessageReceived(from, msg));
+      } else {
+        self.ban_peer(from);
+      }
     } else {
-      // sending messages on unsubscribed topics is a protocol violation
-      self.ban_peer(from);
+      unreachable!("It would have terminated for unassigned topics");
     }
   }
 
@@ -385,31 +341,35 @@ impl Network {
   fn inject_event(&mut self, event: behaviour::Event) {
     debug!("network event: {event:?}");
     match event {
-      behaviour::Event::MessageReceived(from, msg) => {
+      behaviour::Event::MessageReceived(from, conn, msg) => {
         increment_counter!(
           "received_messages",
           "peer" => from.to_base58(),
           "topic" => msg.topic.clone()
         );
-        self.accept_message(from, msg)
+        self.accept_message(from, conn, msg)
       }
       behaviour::Event::LocalAddressDiscovered(addr) => {
         increment_counter!("local_address_discovered");
         self.append_local_address(addr)
       }
-      behaviour::Event::ConnectionEstablished { peer, dialer } => {
+      behaviour::Event::ConnectionEstablished {
+        peer,
+        dialer,
+        connection_id,
+      } => {
         increment_counter!(
           "connections_established", 
           "peer" => peer.peer_id.to_base58(), 
           "dialer" => dialer.to_string());
-        self.complete_connect(peer, dialer)
+        self.complete_connect(peer, connection_id, dialer)
       }
-      behaviour::Event::ConnectionClosed(peer) => {
+      behaviour::Event::ConnectionClosed(peer, connection_id) => {
         increment_counter!(
           "connections_closed",
           "peer" => peer.to_base58()
         );
-        self.complete_disconnect(peer);
+        self.complete_disconnect(peer, connection_id);
       }
     }
   }
@@ -429,6 +389,9 @@ impl Stream for Network {
       for topic in self.topics.values_mut() {
         topic.inject_event(Event::Tick);
       }
+
+      // prune all expiring collections
+      self.muxer.prune_expired();
 
       if let Some(ref mut history) = self.history {
         history.prune_expired();
@@ -459,195 +422,5 @@ impl Stream for Network {
     }
 
     Poll::Pending
-  }
-}
-
-/// Used to track peers connections and their assosiation with
-/// joined topics on this node. Here refcounts are tracked to make
-/// sure that the physical link is closed when no topics are shared
-/// anymore between two peers. It is also used to properly signal
-/// PeerConnected and PeerDisconnected to topics. Also keeps track
-/// of a bidirectional mapping between peer ids and their TCP addresses.
-struct ConnectionTracker {
-  /// maps peer identifiers to their addresses
-  ids: HashMap<PeerId, HashSet<Multiaddr>>,
-
-  /// maps IP addresses to peer identities.
-  addresses: HashMap<Multiaddr, PeerId>,
-
-  /// Keeps track of topics that have requested connections
-  /// to a given peer but a connection was not established yet.
-  pending_dials: HashMap<Multiaddr, HashSet<String>>,
-
-  /// refcount: how many topics are connected to this peer id
-  connections: HashMap<PeerId, HashSet<String>>,
-
-  /// Tracks the topic that was last to disconnect from a peer
-  /// and waits for the physical link to be closed.
-  pending_disconnects: HashMap<PeerId, String>,
-
-  /// Tracks established incoming connections that have not sent
-  /// any messages to any topic to the current node.
-  ///
-  /// When a remote peer dials into the current node and a new
-  /// connection is established, we don't know what topic(s) it
-  /// will be using on this node yet, so we don't know which topics
-  /// to inform about a new connection. Peers connecting to us will
-  /// start their life in this group until they send the first message.
-  ///
-  /// On first message, the topic will first get PeerConnected event
-  /// followed by MessageReceived. If a connection is established and
-  /// no message is received for a configurable amount of time, then
-  /// it is automatically disconnected and banned.
-  pending_connections: HashMap<PeerId, (Instant, AddressablePeer)>,
-}
-
-impl ConnectionTracker {
-  pub fn new() -> Self {
-    Self {
-      ids: HashMap::new(),
-      addresses: HashMap::new(),
-      connections: HashMap::new(),
-      pending_dials: HashMap::new(),
-      pending_disconnects: HashMap::new(),
-      pending_connections: HashMap::new(),
-    }
-  }
-
-  fn connected(&self, addr: &Multiaddr) -> bool {
-    if let Some(peer) = self.addresses.get(addr) {
-      return self.connections.contains_key(peer);
-    }
-    false
-  }
-
-  fn open_connections_count(&self) -> usize {
-    self.connections.len()
-  }
-
-  fn pending_connections_count(&self) -> usize {
-    self.pending_connections.len()
-  }
-
-  fn add_pending_dial(&mut self, addr: Multiaddr, topic: String) {
-    match self.pending_dials.entry(addr) {
-      Entry::Occupied(mut entry) => {
-        entry.get_mut().insert(topic);
-      }
-      Entry::Vacant(entry) => {
-        entry.insert([topic].into_iter().collect());
-      }
-    }
-  }
-
-  fn add_pending_connection(&mut self, peer: AddressablePeer) {
-    for addr in &peer.addresses {
-      self.addresses.insert(addr.clone(), peer.peer_id);
-      match self.ids.entry(peer.peer_id) {
-        Entry::Occupied(mut o) => {
-          o.get_mut().insert(addr.clone());
-        }
-        Entry::Vacant(v) => {
-          v.insert([addr.clone()].into_iter().collect());
-        }
-      }
-    }
-
-    self
-      .pending_connections
-      .insert(peer.peer_id, (Instant::now(), peer));
-  }
-
-  fn try_move_pending_connection(
-    &mut self,
-    peer: PeerId,
-    topic: &str,
-  ) -> Option<AddressablePeer> {
-    if let Some((_, addrpeer)) = self.pending_connections.remove(&peer) {
-      self.add_connection(peer, topic);
-      return Some(addrpeer);
-    }
-    None
-  }
-
-  /// Called when the last connected topic requests disconnection from
-  /// a peer (refcount reached zero). That case will start physically
-  /// disconnecting from the peer TCP link.
-  fn add_pending_disconnect(&mut self, peer: PeerId, topic: String) {
-    self.pending_disconnects.insert(peer, topic);
-  }
-
-  fn get_peer_by_addr(&self, addr: &Multiaddr) -> Option<AddressablePeer> {
-    if let Some(peer) = self.addresses.get(addr) {
-      return Some(AddressablePeer {
-        peer_id: *peer,
-        addresses: [addr.clone()].into_iter().collect(),
-      });
-    }
-    None
-  }
-
-  /// Registers a connection with a peer for a topic
-  fn add_connection(&mut self, peer: PeerId, topic: &str) -> usize {
-    match self.connections.entry(peer) {
-      Entry::Occupied(mut o) => {
-        o.get_mut().insert(topic.into());
-      }
-      Entry::Vacant(v) => {
-        v.insert([topic.into()].into_iter().collect());
-      }
-    };
-
-    self.connections.get(&peer).expect("just inserted").len()
-  }
-
-  fn remove_connection(&mut self, peer: PeerId, topic: &str) -> Option<usize> {
-    match self.connections.entry(peer) {
-      Entry::Occupied(mut o) => {
-        o.get_mut().remove(topic);
-        Some(o.get().len())
-      }
-      Entry::Vacant(_) => None,
-    };
-
-    self.connections.remove(&peer).map(|t| t.len())
-  }
-
-  fn remove_all_connections(&mut self, peer: PeerId) -> Option<Vec<String>> {
-    if let Some(addrs) = self.ids.remove(&peer) {
-      for addr in addrs {
-        self.addresses.remove(&addr);
-      }
-    }
-
-    self
-      .connections
-      .remove(&peer)
-      .map(|topics| topics.into_iter().collect())
-  }
-
-  fn take_pending_disconnect(&mut self, peer: &PeerId) -> Option<String> {
-    self.pending_disconnects.remove(peer)
-  }
-
-  fn get_pending_dials(&self, peer: &AddressablePeer) -> Vec<String> {
-    let mut output = vec![];
-    for addr in &peer.addresses {
-      if let Some(pending) = self.pending_dials.get(addr) {
-        output.append(&mut pending.iter().cloned().collect());
-      }
-    }
-    output
-  }
-
-  fn remove_pending_dial(&mut self, peer: &AddressablePeer, topic: &str) {
-    for addr in &peer.addresses {
-      if let Some(topics) = self.pending_dials.get_mut(addr) {
-        topics.remove(topic);
-        if topics.is_empty() {
-          self.pending_dials.remove(addr);
-        }
-      }
-    }
   }
 }
