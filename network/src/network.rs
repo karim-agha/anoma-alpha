@@ -307,7 +307,6 @@ impl Network {
     // recently, then ignore it and don't propagate to topics.
     if let Some(ref mut history) = self.history {
       if history.insert(*msg.hash()) {
-        tracing::info!(?msg, "duplicate message");
         increment_counter!(
           "duplicate_messages",
           "peer" => from.to_base58(),

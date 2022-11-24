@@ -41,7 +41,7 @@ use {
   },
   thiserror::Error,
   tokio::sync::mpsc::UnboundedSender,
-  tracing::{debug, info, warn},
+  tracing::{debug, error, info, warn},
 };
 
 #[derive(Debug, Error)]
@@ -266,7 +266,7 @@ impl TopicInner {
       Action::ShuffleReply(sr) => {
         self.consume_shuffle_reply(sender, sr, connection)
       }
-      Action::Gossip(b) => self.consume_gossip(sender, b),
+      Action::Gossip(b) => self.consume_gossip(sender, b, connection),
     }
   }
 
@@ -402,6 +402,13 @@ impl TopicInner {
   }
 
   fn handle_tick(&mut self) {
+    // clean up expiring collections
+    self.pending_dials.prune_expired();
+    self.pending_disconnects.prune_expired();
+    self.pending_joins.prune_expired();
+    self.pending_neighbours.prune_expired();
+    self.pending_shuffle_replies.prune_expired();
+
     if self.last_shuffle.elapsed() > self.network_config.shuffle_interval {
       self.initiate_shuffle();
     }
@@ -438,11 +445,13 @@ impl TopicInner {
 
 impl TopicInner {
   fn disconnect(&mut self, peer: PeerId, connection: ConnectionId) {
-    tracing::info!("{}: disconnecting: {}", self.topic_config.name, peer);
-    self
-      .cmdtx
-      .send(Command::Disconnect { connection, peer })
-      .expect("topic lifetime < network lifetime");
+    if !self.pending_disconnects.insert(peer) {
+      tracing::info!("{}: disconnecting: {}", self.topic_config.name, peer);
+      self
+        .cmdtx
+        .send(Command::Disconnect { connection, peer })
+        .expect("topic lifetime < network lifetime");
+    }
   }
 
   fn dial_addr(&mut self, addr: Multiaddr) {
@@ -493,12 +502,6 @@ impl TopicInner {
     connection: ConnectionId,
     msg: Message,
   ) {
-    tracing::info!(
-      "{}: message sent to {}: {:?}",
-      self.topic_config.name,
-      peer,
-      msg
-    );
     self
       .cmdtx
       .send(Command::SendMessage {
@@ -532,22 +535,31 @@ impl TopicInner {
     self.active_peers.len() >= self.network_config.max_active_view_size()
   }
 
+  fn active_view_overconnected(&self) -> bool {
+    self.active_peers.len() > self.network_config.max_active_view_size()
+  }
+
   fn add_to_passive_view(&mut self, peer: AddressablePeer) {
-    self.passive_peers.insert(peer.peer_id, peer.addresses);
+    if self
+      .passive_peers
+      .insert(peer.peer_id, peer.addresses)
+      .is_none()
+    {
+      info!(
+        "{}: added to passive view: {}",
+        self.topic_config.name, peer.peer_id
+      );
 
-    info!(
-      "{}: added to passive view: {}",
-      self.topic_config.name, peer.peer_id
-    );
-
-    // if we've reached the passive view limit, remove a random node
-    if self.passive_peers.len() > self.network_config.max_passive_view_size() {
-      let random = *self
-        .passive_peers
-        .keys()
-        .choose(&mut rand::thread_rng())
-        .expect("already checked that it is not empty");
-      self.remove_from_passive_view(random);
+      // if we've reached the passive view limit, remove a random node
+      if self.passive_peers.len() > self.network_config.max_passive_view_size()
+      {
+        let random = *self
+          .passive_peers
+          .keys()
+          .choose(&mut rand::thread_rng())
+          .expect("already checked that it is not empty");
+        self.remove_from_passive_view(random);
+      }
     }
   }
 
@@ -592,27 +604,26 @@ impl TopicInner {
   /// If the active view is not saturated, it will randomly pick a peer
   /// from the passive view and try to add it to the active view.
   fn try_stabilize_active_view(&mut self) {
-    if self.active_view_starved()
+    if !self.active_view_starved()
       && self.pending_dials.is_empty()
       && self.pending_neighbours.is_empty()
     {
-      if let Some(peer) =
+      // we're starved, try to connect to a random passive peer
+      let random_passive =
         self.passive_peers.iter().choose(&mut thread_rng()).map(
           |(peer, addrs)| AddressablePeer {
             peer_id: *peer,
             addresses: addrs.clone(),
           },
-        )
-      {
+        );
+
+      if let Some(peer) = random_passive {
         self.try_initiate_neighbouring_with(peer);
-      } else if self.passive_peers.is_empty()
-        && self.active_peers.is_empty()
-        && self.pending_dials.is_empty()
-        && self.pending_joins.is_empty()
-      {
+      } else if self.pending_dials.is_empty() && self.pending_joins.is_empty() {
         // this case occurs when we failed to establish
-        // a connection with any of the bootstrap nodes.
-        // retry dialing them and JOIN the topic.
+        // a connection with any of the bootstrap nodes
+        // and our passive view is empty. retry dialing
+        // them and JOIN the topic.
         //
         // We don't know anything about the network yet,
         // and this is the only bit of information that
@@ -623,10 +634,8 @@ impl TopicInner {
       }
 
       increment_counter!("replenish_active_view");
-    } else if self
-      .active_peers
-      .len()
-      .gt(&self.network_config.max_active_view_size())
+    } else if self.active_view_overconnected()
+      && self.pending_disconnects.is_empty()
     {
       // active view is too large, disconnect a random connection
       let (peerid, (connection, _)) = self
@@ -752,7 +761,7 @@ impl TopicInner {
 
     // if last hop, must create active connection
     if msg.hop as usize >= self.network_config.random_walk_length() {
-      if !self.pending_neighbours.insert(msg.node.peer_id) {
+      if !self.pending_neighbours.contains(&msg.node.peer_id) {
         if self.active_view_full() {
           // our active view is full, need to free up a slot
           let (random_id, rand_conn) = self
@@ -1078,10 +1087,16 @@ impl TopicInner {
   /// Those messages are emitted to listeners on this topic events.
   /// The message id is a randomly generated identifier by the originating
   /// node and is used to ignore duplicate messages.
-  fn consume_gossip(&mut self, sender: PeerId, msg: Bytes) {
+  fn consume_gossip(
+    &mut self,
+    sender: PeerId,
+    msg: Bytes,
+    connection: ConnectionId,
+  ) {
     // only active peers are allowed to send this message.
     if !self.is_active(&sender) {
-      tracing::error!("gossip from inactive peer {sender}: {msg:?}");
+      error!("gossip from inactive peer {sender}: {msg:?}");
+      self.disconnect(sender, connection);
       return;
     }
 

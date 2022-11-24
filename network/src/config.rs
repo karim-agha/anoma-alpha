@@ -107,15 +107,15 @@ impl Default for Config {
   fn default() -> Self {
     Self {
       network_size: 100,
-      active_view_factor: 1,
-      active_view_starve_factor: 0.3, // 30%
+      active_view_factor: 3,
+      active_view_starve_factor: 0.5, // 50%
       passive_view_factor: 6,
       shuffle_sample_size: 30,
       shuffle_probability: 0.3, // shuffle 30% of the time
       shuffle_interval: Duration::from_secs(60), // every minute (during dev)
       tick_interval: Duration::from_millis(500),
-      pending_timeout: Duration::from_secs(10),
-      dedupe_interval: Some(Duration::from_secs(10)),
+      pending_timeout: Duration::from_secs(15),
+      dedupe_interval: Some(Duration::from_secs(5)),
       max_transmit_size: 64 * 1024, // 64KB
       listen_addrs: vec![
         "/ip4/0.0.0.0/tcp/44668".parse().unwrap(),
