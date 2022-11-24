@@ -68,7 +68,11 @@ pub enum Command {
 
   /// Sends a message to one peer in the active view of
   /// one of the topics.
-  SendMessage { peer: PeerId, msg: Message },
+  SendMessage {
+    peer: PeerId,
+    connection: ConnectionId,
+    msg: Message,
+  },
 }
 
 /// Manages the event loop that drives the network layer.
@@ -173,13 +177,13 @@ fn start_network_runloop(
             Command::Disconnect(peer, connection) => {
               swarm.behaviour().disconnect_from(peer, connection);
             }
-            Command::SendMessage { peer, msg } => {
+            Command::SendMessage { peer, connection, msg } => {
               increment_counter!(
                 "messages_sent",
                 "peer" => peer.to_string(),
                 "topic" => msg.topic.clone()
               );
-              swarm.behaviour().send_to(peer, msg);
+              swarm.behaviour().send_to(peer, connection, msg);
             }
             Command::BanPeer(peer) => {
               increment_counter!(

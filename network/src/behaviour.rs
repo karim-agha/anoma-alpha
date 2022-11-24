@@ -40,12 +40,8 @@ pub(crate) enum Event {
   /// overlays the two peers share. All overlapping overlays share the
   /// same connection.
   ConnectionEstablished {
-    /// True if this node initiated the connection, otherwise false.
-    dialer: bool,
-
-    /// Address and identity of the remote peer.
     peer: AddressablePeer,
-
+    endpoint: ConnectedPoint,
     connection_id: ConnectionId,
   },
 
@@ -64,7 +60,7 @@ pub(crate) struct Behaviour {
   config: Config,
   events: Channel<Event>,
   disconnects: Channel<(PeerId, ConnectionId)>,
-  outmsgs: Channel<(PeerId, Message)>,
+  outmsgs: Channel<(PeerId, ConnectionId, Message)>,
 }
 
 impl Behaviour {
@@ -77,8 +73,8 @@ impl Behaviour {
     }
   }
 
-  pub fn send_to(&self, peer: PeerId, msg: Message) {
-    self.outmsgs.send((peer, msg));
+  pub fn send_to(&self, peer: PeerId, connection: ConnectionId, msg: Message) {
+    self.outmsgs.send((peer, connection, msg));
   }
 
   pub fn disconnect_from(&self, peer: PeerId, connection: ConnectionId) {
@@ -117,7 +113,7 @@ impl NetworkBehaviour for Behaviour {
   ) {
     self.events.send(Event::ConnectionEstablished {
       connection_id: *connection_id,
-      dialer: matches!(endpoint, ConnectedPoint::Dialer { .. }),
+      endpoint: endpoint.clone(),
       peer: AddressablePeer {
         peer_id: *peer_id,
         addresses: [endpoint.get_remote_address().clone()]
@@ -167,7 +163,6 @@ impl NetworkBehaviour for Behaviour {
     if let Poll::Ready(Some((peer_id, connection))) =
       self.disconnects.poll_recv(cx)
     {
-      tracing::info!(?peer_id, ?connection, "behaviour poll disconnects");
       return Poll::Ready(NetworkBehaviourAction::CloseConnection {
         peer_id,
         connection: CloseConnection::One(connection),
@@ -176,10 +171,12 @@ impl NetworkBehaviour for Behaviour {
 
     // Send next message from outbound queue by forwarding it to the
     // connection handler associated with the given peer id.
-    if let Poll::Ready(Some((peer, msg))) = self.outmsgs.poll_recv(cx) {
+    if let Poll::Ready(Some((peer, connection, msg))) =
+      self.outmsgs.poll_recv(cx)
+    {
       return Poll::Ready(NetworkBehaviourAction::NotifyHandler {
         peer_id: peer,
-        handler: NotifyHandler::Any,
+        handler: NotifyHandler::One(connection),
         event: msg,
       });
     }

@@ -66,16 +66,6 @@ impl<K: Eq + Hash, V> ExpiringMap<K, V> {
     None
   }
 
-  pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
-    if let Some(value) = self.data.get_mut(key) {
-      if value.1.elapsed() > self.lifespan {
-        return None;
-      }
-      return Some(&mut value.0);
-    }
-    None
-  }
-
   pub fn contains_key(&self, key: &K) -> bool {
     self.get(key).is_some()
   }

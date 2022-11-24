@@ -1,9 +1,8 @@
 use {
   crate::{cache::ExpiringMap, wire::AddressablePeer, Config},
-  bimap::BiHashMap,
   libp2p::{core::connection::ConnectionId, Multiaddr, PeerId},
   std::{
-    collections::{hash_map::Entry, HashMap, HashSet, VecDeque},
+    collections::{hash_map::Entry, HashMap, HashSet},
     net::IpAddr,
   },
 };
@@ -19,29 +18,29 @@ pub struct Muxer {
   /// a mapping of peer id to all joined subtopics.
   /// The value on this map is a tuple of the substream id
   /// and the topic name.
-  assigned: HashMap<PeerId, BiHashMap<ConnectionId, TopicName>>,
+  assigned: HashMap<PeerId, HashMap<ConnectionId, TopicName>>,
 
   /// Peers that have successfully established a connection with the
   /// current node but have not yet communicated on any topic. We still
   /// don't know the mapping between ConnectionId and TopicName. That
   /// mapping will be discovered after a peer sends their first message.
-  unassigned: ExpiringMap<PeerId, (AddressablePeer, HashSet<ConnectionId>)>,
+  unassigned: HashMap<PeerId, (AddressablePeer, HashSet<ConnectionId>)>,
 
   /// Keeps track of topics that have requested connections
   /// to a given peer but a connection was not established yet.
-  requested_dials: ExpiringMap<IpAddress, VecDeque<String>>,
+  requested_dials: HashMap<IpAddress, HashMap<TopicName, Multiaddr>>,
 
   /// Dials currently in progress groupped by the destination IP
   /// address (no port).
-  ongoing_dials: ExpiringMap<IpAddress, String>,
+  ongoing_dials: ExpiringMap<IpAddress, TopicName>,
 }
 
 impl Muxer {
   pub fn new(config: &Config) -> Self {
     Self {
       assigned: HashMap::new(),
-      unassigned: ExpiringMap::new(config.pending_timeout),
-      requested_dials: ExpiringMap::new(config.pending_timeout),
+      unassigned: HashMap::new(),
+      requested_dials: HashMap::new(),
       ongoing_dials: ExpiringMap::new(config.pending_timeout),
     }
   }
@@ -60,6 +59,15 @@ impl Muxer {
     }
   }
 
+  pub fn disconnect(&mut self, peer: PeerId, connection: ConnectionId) {
+    if let Some(peer_conns) = self.assigned.get_mut(&peer) {
+      peer_conns.remove(&connection);
+      if peer_conns.is_empty() {
+        self.assigned.remove(&peer);
+      }
+    }
+  }
+
   /// Called when a remote node is dialed by a topic.
   /// At this stage we still don't know what connection id will
   /// be assigned to this link and what is the peer id.
@@ -68,28 +76,36 @@ impl Muxer {
   /// connection, then we will discover the mapping of
   /// connection_id <--> topic for this peer.
   pub fn put_dial(&mut self, addr: Multiaddr, topic: TopicName) {
+    let exactaddr = addr.clone();
     if let Ok(socketaddr) = addr.try_into() {
       if let Some(topics) = self.requested_dials.get_mut(&socketaddr) {
-        topics.push_back(topic);
+        topics.insert(topic, exactaddr);
       } else {
         self
           .requested_dials
-          .insert(socketaddr, [topic].into_iter().collect());
+          .insert(socketaddr, [(topic, exactaddr)].into_iter().collect());
       }
     }
   }
 
-  pub fn next_dial(&mut self, addr: &Multiaddr) -> bool {
+  pub fn poll_dial(&self) -> Option<(TopicName, Multiaddr)> {
+    if let Some((_, dial)) = self.requested_dials.iter().next() {
+      dial.iter().next().map(|(k, v)| (k.clone(), v.clone()))
+    } else {
+      None
+    }
+  }
+
+  pub fn next_dial(&mut self, addr: &Multiaddr, topic: &TopicName) -> bool {
     if let Ok(socketaddr) = addr.try_into() {
       if !self.ongoing_dials.contains_key(&socketaddr) {
         if let Some(requested) = self.requested_dials.get_mut(&socketaddr) {
-          if let Some(next) = requested.pop_front() {
+          if requested.remove(topic).is_some() {
             if requested.is_empty() {
               self.requested_dials.remove(&socketaddr);
             }
-            self.ongoing_dials.insert(socketaddr, next);
+            self.ongoing_dials.insert(socketaddr, topic.clone());
             return true;
-          } else {
           }
         }
       }
@@ -170,18 +186,7 @@ impl Muxer {
     self
       .assigned
       .get(peer)
-      .and_then(|conns| conns.get_by_left(connection))
-  }
-
-  pub fn resolve_connection(
-    &self,
-    peer: &PeerId,
-    topic: &TopicName,
-  ) -> Option<&ConnectionId> {
-    self
-      .assigned
-      .get(peer)
-      .and_then(|conns| conns.get_by_right(topic))
+      .and_then(|conns| conns.get(connection))
   }
 
   pub fn assigned_count(&self) -> usize {
@@ -193,13 +198,12 @@ impl Muxer {
   }
 
   pub fn prune_expired(&mut self) {
-    self.requested_dials.prune_expired();
-    self.unassigned.prune_expired();
+    self.ongoing_dials.prune_expired();
   }
 }
 
 #[derive(Debug, Hash, PartialEq, PartialOrd, Eq)]
-struct IpAddress(IpAddr);
+pub struct IpAddress(IpAddr);
 
 impl TryFrom<Multiaddr> for IpAddress {
   type Error = ();

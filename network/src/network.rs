@@ -11,7 +11,7 @@ use {
   },
   futures::{Stream, StreamExt},
   libp2p::{
-    core::connection::ConnectionId,
+    core::{connection::ConnectionId, ConnectedPoint},
     identity::Keypair,
     noise::NoiseError,
     Multiaddr,
@@ -55,11 +55,18 @@ pub(crate) enum Command {
   Connect { addr: Multiaddr, topic: String },
 
   /// Invoked by topics when removing peers from the active view.
-  Disconnect { peer: PeerId, topic: String },
+  Disconnect {
+    peer: PeerId,
+    connection: ConnectionId,
+  },
 
   /// Sends a message to one peer in the active view of
   /// one of the topics.
-  SendMessage { peer: PeerId, msg: Message },
+  SendMessage {
+    peer: PeerId,
+    connection: ConnectionId,
+    msg: Message,
+  },
 
   /// Immediately disconnects a peer from all topics
   /// and forbids it from connecting again to this node.
@@ -130,6 +137,7 @@ impl Network {
   /// Instanciates a network object.
   pub fn new(config: Config, keypair: Keypair) -> Result<Self, Error> {
     let peer_id = keypair.public().into();
+    tracing::info!("local identity: {peer_id}");
     let commands = Channel::new();
     Ok(Self {
       topics: HashMap::new(),
@@ -206,9 +214,9 @@ impl Network {
   /// a new active connection with some peer who's identity is
   /// not known yet but we know its address.
   fn begin_connect(&mut self, addr: Multiaddr, topic: String) {
-    self.muxer.put_dial(addr.clone(), topic);
-
-    if self.muxer.next_dial(&addr) {
+    self.muxer.put_dial(addr.clone(), topic.clone());
+    if self.muxer.next_dial(&addr, &topic) {
+      tracing::info!(?addr, ?topic, "next_dial");
       self.runloop.send_command(runloop::Command::Connect(addr));
     }
   }
@@ -219,26 +227,28 @@ impl Network {
     &mut self,
     peer: AddressablePeer,
     connection: ConnectionId,
-    dialer: bool,
+    endpoint: ConnectedPoint,
   ) {
-    if dialer {
+    if endpoint.is_dialer() {
       // local node initiated the connection, we know which topic(s)
       // called into this peer and we can resolve it right away.
       increment_counter!("dials_outbound");
       if let Some(topic) = self.muxer.match_dial(&peer, connection) {
+        for addr in &peer.addresses {
+          if self.muxer.next_dial(addr, &topic) {
+            tracing::info!(?addr, ?topic, "next_dial");
+            self
+              .runloop
+              .send_command(runloop::Command::Connect(addr.clone()));
+            break;
+          }
+        }
         let topic = self.topics.get_mut(&topic).unwrap_or_else(|| {
           panic!("bug: dialed a peer on a topic not joined by local node");
         });
-        topic.inject_event(Event::PeerConnected(peer.clone()));
+        topic.inject_event(Event::PeerConnected(peer.clone(), connection));
       } else {
         unreachable!("bug: a dialed address is not tracked by the muxer");
-      }
-
-      for addr in peer.addresses {
-        if self.muxer.next_dial(&addr) {
-          self.runloop.send_command(runloop::Command::Connect(addr));
-          break;
-        }
       }
     } else {
       // remote peer initiated the connection, we still don't know
@@ -250,15 +260,10 @@ impl Network {
   }
 
   /// invoked when this node initiated a disconnect from a remote peer
-  fn begin_disconnect(&mut self, peer: PeerId, topic: String) {
-    let connection = self
-      .muxer
-      .resolve_connection(&peer, &topic)
-      .expect("bug: disconnecting from an untracked connection");
-
+  fn begin_disconnect(&mut self, peer: PeerId, connection: ConnectionId) {
     self
       .runloop
-      .send_command(runloop::Command::Disconnect(peer, *connection));
+      .send_command(runloop::Command::Disconnect(peer, connection));
   }
 
   /// This happens when the last topic on this node requests a connection to a
@@ -269,10 +274,12 @@ impl Network {
         .topics
         .get_mut(topic)
         .expect("resolve would return None");
-      topic.inject_event(Event::PeerDisconnected(peer));
+      topic.inject_event(Event::PeerDisconnected(peer, connection));
     } else {
       tracing::info!(?peer, "disconnected from unknown topic");
     }
+
+    self.muxer.disconnect(peer, connection);
   }
 
   fn append_local_address(&mut self, address: Multiaddr) {
@@ -300,6 +307,7 @@ impl Network {
     // recently, then ignore it and don't propagate to topics.
     if let Some(ref mut history) = self.history {
       if history.insert(*msg.hash()) {
+        tracing::info!(?msg, "duplicate message");
         increment_counter!(
           "duplicate_messages",
           "peer" => from.to_base58(),
@@ -317,7 +325,7 @@ impl Network {
       // signal to the topic that a peer was connected before
       // routing any messages
       if let Some(topic) = self.topics.get_mut(&msg.topic) {
-        topic.inject_event(topic::Event::PeerConnected(peer));
+        topic.inject_event(topic::Event::PeerConnected(peer, connection));
       } else {
         // a peer is sending message on an unrecognized topic
         // this is a protocol violation.
@@ -328,7 +336,8 @@ impl Network {
 
     if let Some(topic) = self.muxer.resolve_topic(&from, &connection) {
       if let Some(topic) = self.topics.get_mut(topic) {
-        topic.inject_event(topic::Event::MessageReceived(from, msg));
+        topic
+          .inject_event(topic::Event::MessageReceived(from, msg, connection));
       } else {
         self.ban_peer(from);
       }
@@ -355,14 +364,13 @@ impl Network {
       }
       behaviour::Event::ConnectionEstablished {
         peer,
-        dialer,
+        endpoint,
         connection_id,
       } => {
         increment_counter!(
           "connections_established", 
-          "peer" => peer.peer_id.to_base58(), 
-          "dialer" => dialer.to_string());
-        self.complete_connect(peer, connection_id, dialer)
+          "peer" => peer.peer_id.to_base58());
+        self.complete_connect(peer, connection_id, endpoint)
       }
       behaviour::Event::ConnectionClosed(peer, connection_id) => {
         increment_counter!(
@@ -397,6 +405,14 @@ impl Stream for Network {
         history.prune_expired();
       }
 
+      // check outstanding requested dials
+      if let Some((topic, addr)) = self.muxer.poll_dial() {
+        if self.muxer.next_dial(&addr, &topic) {
+          tracing::info!(?addr, ?topic, "next_dial");
+          self.runloop.send_command(runloop::Command::Connect(addr));
+        }
+      }
+
       return Poll::Ready(Some(()));
     }
 
@@ -406,13 +422,19 @@ impl Stream for Network {
         Command::Connect { addr, topic } => {
           self.begin_connect(addr, topic);
         }
-        Command::Disconnect { peer, topic } => {
-          self.begin_disconnect(peer, topic)
+        Command::Disconnect { peer, connection } => {
+          self.begin_disconnect(peer, connection)
         }
-        Command::SendMessage { peer, msg } => {
-          self
-            .runloop
-            .send_command(runloop::Command::SendMessage { peer, msg });
+        Command::SendMessage {
+          peer,
+          msg,
+          connection,
+        } => {
+          self.runloop.send_command(runloop::Command::SendMessage {
+            peer,
+            connection,
+            msg,
+          });
         }
         Command::BanPeer(peer) => self.ban_peer(peer),
         Command::InjectEvent(event) => self.inject_event(event),
