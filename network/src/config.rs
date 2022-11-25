@@ -10,7 +10,7 @@ pub struct Config {
   /// active view size = Ln(N) + C
   ///
   /// This is the fan-out of the node.
-  pub active_view_factor: usize,
+  pub active_view_constant: usize,
 
   /// If the active view size is smaller than
   /// this percentage of the maximum view size,
@@ -42,10 +42,6 @@ pub struct Config {
   /// view anyway.
   pub shuffle_probability: f32,
 
-  /// The maximum number of peers to send from all views
-  /// in each shuffle operation.
-  pub shuffle_sample_size: usize,
-
   /// Local network addresses this node will listen on for incoming
   /// connections. By default it will listen on all available IPv4 and IPv6
   /// addresses on port 44668.
@@ -73,13 +69,13 @@ pub struct Config {
   /// This is a periodic event that triggers all topics to perform
   /// maintenance tasks. It gets emitted to topics regardless of
   /// other topic activity.
-  pub tick_interval: Duration,
+  pub maintenance_tick_interval: Duration,
 }
 
 impl Config {
-  pub fn max_active_view_size(&self) -> usize {
-    ((self.network_size as f64).log2() + self.active_view_factor as f64).round()
-      as usize
+  pub fn optimal_active_view_size(&self) -> usize {
+    ((self.network_size as f64).log2() + self.active_view_constant as f64)
+      .round() as usize
   }
 
   /// A node is considered starving when it's active view size is less than
@@ -90,16 +86,33 @@ impl Config {
   /// Two thresholds allow to avoid cyclical connections and disconnections when
   /// new nodes are connected to a group of overconnected nodes.
   pub fn min_active_view_size(&self) -> usize {
-    (self.max_active_view_size() as f64 * self.active_view_starve_factor).ceil()
-      as usize
+    (self.optimal_active_view_size() as f64 * self.active_view_starve_factor)
+      .ceil() as usize
   }
 
   pub fn max_passive_view_size(&self) -> usize {
-    self.max_active_view_size() * self.passive_view_factor
+    self.optimal_active_view_size() * self.passive_view_factor
   }
 
   pub fn random_walk_length(&self) -> usize {
     (self.network_size as f64).log10().ceil() as usize
+  }
+
+  /// The maximum number of peers to send from all views
+  /// in each shuffle operation.
+  /// 
+  /// This value is set to half the passive view size, 
+  /// to make sure that we still retain a portion of 
+  /// the old passive peers after receiving info about 
+  /// new ones.
+  /// 
+  /// This applies to incoming and outgoing shuffles,
+  /// for outgoing, this is the numbe of randomly chosen 
+  /// peers that will be sent, and for incoming this is
+  /// the number of randomly chosen peers that will be 
+  /// considered from any incoming shuffle.
+  pub fn shuffle_sample_size(&self) -> usize {
+    self.max_passive_view_size().div_euclid(2)
   }
 }
 
@@ -107,13 +120,13 @@ impl Default for Config {
   fn default() -> Self {
     Self {
       network_size: 100,
-      active_view_factor: 3,
-      active_view_starve_factor: 0.5, // 50%
+      active_view_constant: 1,
+      active_view_starve_factor: 0.75, // 75%
       passive_view_factor: 6,
-      shuffle_sample_size: 30,
       shuffle_probability: 0.3, // shuffle 30% of the time
-      shuffle_interval: Duration::from_secs(60), // every minute (during dev)
-      tick_interval: Duration::from_millis(500),
+      shuffle_interval: Duration::from_secs(300), /* every 5 minutes (during
+                                                   * dev) */
+      maintenance_tick_interval: Duration::from_secs(5),
       pending_timeout: Duration::from_secs(15),
       dedupe_interval: Some(Duration::from_secs(5)),
       max_transmit_size: 64 * 1024, // 64KB

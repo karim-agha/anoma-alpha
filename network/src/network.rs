@@ -142,7 +142,7 @@ impl Network {
     Ok(Self {
       topics: HashMap::new(),
       muxer: Muxer::new(&config),
-      tick: interval(config.tick_interval),
+      tick: interval(config.maintenance_tick_interval),
       history: config.dedupe_interval.map(ExpiringSet::new),
       runloop: Runloop::new(&config, keypair, commands.sender())?,
       this: AddressablePeer {

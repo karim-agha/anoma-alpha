@@ -327,7 +327,7 @@ impl TopicInner {
 
       // send & close connection if not in active view
       if !self.is_active(&peer.peer_id) {
-        self.disconnect(peer.peer_id, connection);
+        self.disconnect(peer.peer_id, connection, "inactive shuffle reply");
       }
     }
   }
@@ -347,14 +347,6 @@ impl TopicInner {
       && !self.pending_neighbours.contains(&peer.peer_id)
       && !self.pending_shuffle_replies.contains_key(&peer.peer_id)
     {
-      tracing::info!(
-        "{}: sending join to {peer:?}. d: {:?}, n: {:?}, j: {:?}",
-        self.topic_config.name,
-        self.pending_dials,
-        self.pending_neighbours,
-        self.pending_joins
-      );
-
       self.send_message(
         peer.peer_id,
         connection,
@@ -444,9 +436,18 @@ impl TopicInner {
 }
 
 impl TopicInner {
-  fn disconnect(&mut self, peer: PeerId, connection: ConnectionId) {
+  fn disconnect(
+    &mut self,
+    peer: PeerId,
+    connection: ConnectionId,
+    reason: &str,
+  ) {
     if !self.pending_disconnects.insert(peer) {
-      tracing::info!("{}: disconnecting: {}", self.topic_config.name, peer);
+      tracing::info!(
+        "{}: disconnecting {}: {reason}",
+        self.topic_config.name,
+        peer
+      );
       self
         .cmdtx
         .send(Command::Disconnect { connection, peer })
@@ -532,11 +533,11 @@ impl TopicInner {
 
   /// Full topics are ones that have their active view full.
   fn active_view_full(&self) -> bool {
-    self.active_peers.len() >= self.network_config.max_active_view_size()
+    self.active_peers.len() >= self.network_config.optimal_active_view_size()
   }
 
   fn active_view_overconnected(&self) -> bool {
-    self.active_peers.len() > self.network_config.max_active_view_size()
+    self.active_peers.len() > self.network_config.optimal_active_view_size()
   }
 
   fn add_to_passive_view(&mut self, peer: AddressablePeer) {
@@ -604,7 +605,7 @@ impl TopicInner {
   /// If the active view is not saturated, it will randomly pick a peer
   /// from the passive view and try to add it to the active view.
   fn try_stabilize_active_view(&mut self) {
-    if !self.active_view_starved()
+    if self.active_view_starved()
       && self.pending_dials.is_empty()
       && self.pending_neighbours.is_empty()
     {
@@ -618,7 +619,7 @@ impl TopicInner {
         );
 
       if let Some(peer) = random_passive {
-        self.try_initiate_neighbouring_with(peer);
+        self.try_neighbouring_with(peer);
       } else if self.pending_dials.is_empty() && self.pending_joins.is_empty() {
         // this case occurs when we failed to establish
         // a connection with any of the bootstrap nodes
@@ -643,7 +644,7 @@ impl TopicInner {
         .iter()
         .choose(&mut rand::thread_rng())
         .expect("already checked that it is not empty");
-      self.disconnect(*peerid, *connection);
+      self.disconnect(*peerid, *connection, "overconnected");
     }
   }
 }
@@ -707,12 +708,12 @@ impl TopicInner {
     }
 
     // close JOIN connection immediately
-    self.disconnect(sender, connection);
+    self.disconnect(sender, connection, "initial join");
 
     if !self.active_view_full() {
       // if our active view is not full, then
       // start adding this peer to our active view
-      self.try_initiate_neighbouring_with(msg.node.clone());
+      self.try_neighbouring_with(msg.node.clone());
     }
 
     // remember this peer
@@ -771,7 +772,11 @@ impl TopicInner {
             .map(|(p, (c, _))| (*p, *c))
             .expect("already checked that it is not empty");
 
-          self.disconnect(random_id, rand_conn);
+          self.disconnect(
+            random_id,
+            rand_conn,
+            "making space for last-hop join request",
+          );
 
           // move the unlucky node to passive view
           self.add_to_passive_view(AddressablePeer {
@@ -785,9 +790,16 @@ impl TopicInner {
           });
         }
 
-        self.try_initiate_neighbouring_with(msg.node);
+        self.try_neighbouring_with(msg.node);
       }
     } else {
+      // if not last hop, create an active connection only if our
+      // active view is not full and forward the join request to
+      // other peers in the active view.
+      if !self.active_view_full() {
+        self.try_neighbouring_with(msg.node.clone());
+      }
+
       for (peer, (connection, _)) in self.active_peers.iter() {
         if *peer != sender {
           self.send_message(
@@ -848,13 +860,21 @@ impl TopicInner {
         .iter()
         .choose(&mut rand::thread_rng())
         .expect("already checked that it is not empty");
-      self.disconnect(*random_id, *rand_conn);
+      self.disconnect(
+        *random_id,
+        *rand_conn,
+        "high priority neighbour connecting on full active view",
+      );
     }
 
     if !self.active_view_full() {
       self.add_to_active_view(msg.peer, connection);
     } else {
-      self.disconnect(sender, connection);
+      self.disconnect(
+        sender,
+        connection,
+        "low priority neighbor connecting on full active view",
+      );
     }
   }
 
@@ -887,8 +907,17 @@ impl TopicInner {
       "peers_count" => msg.peers.len().to_string()
     );
 
-    let recv_peer_ids: HashSet<_> =
-      msg.peers.iter().map(|p| p.peer_id).collect();
+    let recv_peer_ids: HashSet<_> = msg
+      .peers
+      .iter()
+      .choose_multiple(
+        // trim to max shuffle size
+        &mut thread_rng(),
+        self.network_config.shuffle_sample_size(),
+      )
+      .iter()
+      .map(|p| p.peer_id)
+      .collect();
 
     let local_peer_ids: HashSet<_> = self
       .active_peers
@@ -1078,7 +1107,7 @@ impl TopicInner {
       .collect();
 
     if !self.is_active(&sender) {
-      self.disconnect(sender, connection);
+      self.disconnect(sender, connection, "gossip from inactive shuffle reply");
     }
   }
 
@@ -1096,7 +1125,7 @@ impl TopicInner {
     // only active peers are allowed to send this message.
     if !self.is_active(&sender) {
       error!("gossip from inactive peer {sender}: {msg:?}");
-      self.disconnect(sender, connection);
+      self.disconnect(sender, connection, "gossip from inactive peer");
       return;
     }
 
@@ -1133,7 +1162,7 @@ impl TopicInner {
   /// returns true if the neigbouring process was initiated, otherwise returns
   /// false if another similar process is in progress and have not completed
   /// or failed.
-  fn try_initiate_neighbouring_with(&mut self, peer: AddressablePeer) -> bool {
+  fn try_neighbouring_with(&mut self, peer: AddressablePeer) -> bool {
     // make sure it's not alread an active peer and we're not in the middle of
     // dialing this peer
     if self.is_active(&peer.peer_id) || self.is_pending_dial(&peer) {
@@ -1175,7 +1204,7 @@ impl TopicInner {
       .chain(self.passive_peers.keys())
       .choose_multiple(
         &mut thread_rng(),
-        self.network_config.shuffle_sample_size,
+        self.network_config.shuffle_sample_size(),
       );
 
     gauge!("shuffle_size", peers_sample.len() as f64);

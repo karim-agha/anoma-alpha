@@ -65,6 +65,11 @@ impl Muxer {
       if peer_conns.is_empty() {
         self.assigned.remove(&peer);
       }
+    } else if let Some((_, peer_conns)) = self.unassigned.get_mut(&peer) {
+      peer_conns.remove(&connection);
+      if peer_conns.is_empty() {
+        self.unassigned.remove(&peer);
+      }
     }
   }
 
