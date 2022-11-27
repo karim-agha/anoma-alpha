@@ -100,16 +100,16 @@ impl Config {
 
   /// The maximum number of peers to send from all views
   /// in each shuffle operation.
-  /// 
-  /// This value is set to half the passive view size, 
-  /// to make sure that we still retain a portion of 
-  /// the old passive peers after receiving info about 
+  ///
+  /// This value is set to half the passive view size,
+  /// to make sure that we still retain a portion of
+  /// the old passive peers after receiving info about
   /// new ones.
-  /// 
+  ///
   /// This applies to incoming and outgoing shuffles,
-  /// for outgoing, this is the numbe of randomly chosen 
+  /// for outgoing, this is the numbe of randomly chosen
   /// peers that will be sent, and for incoming this is
-  /// the number of randomly chosen peers that will be 
+  /// the number of randomly chosen peers that will be
   /// considered from any incoming shuffle.
   pub fn shuffle_sample_size(&self) -> usize {
     self.max_passive_view_size().div_euclid(2)
@@ -124,8 +124,7 @@ impl Default for Config {
       active_view_starve_factor: 0.75, // 75%
       passive_view_factor: 6,
       shuffle_probability: 0.3, // shuffle 30% of the time
-      shuffle_interval: Duration::from_secs(300), /* every 5 minutes (during
-                                                   * dev) */
+      shuffle_interval: Duration::from_secs(180), // 3 minutes
       maintenance_tick_interval: Duration::from_secs(5),
       pending_timeout: Duration::from_secs(15),
       dedupe_interval: Some(Duration::from_secs(5)),

@@ -84,7 +84,7 @@ services:
       dockerfile: Dockerfile
     environment:
       - RUST_BACKTRACE=1
-    command: sh -c "sleep $$(shuf -i 1-60 -n 1) && ./anoma --secret noop --genesis genesis.json --peer 172.29.1.2:44668"
+    command: sh -c "sleep $$(shuf -i 1-30 -n 1) && ./anoma --secret noop --genesis genesis.json --peer 172.29.1.2:44668"
     networks:
       anoma_test_net:
     depends_on:
@@ -98,7 +98,7 @@ services:
       dockerfile: Dockerfile
     environment:
       - RUST_BACKTRACE=1
-    command: sh -c "sleep $$(shuf -i 1-60 -n 1) && ./solver --secret noop --genesis genesis.json --peer 172.29.1.2:44668"
+    command: sh -c "sleep $$(shuf -i 1-30 -n 1) && ./solver --secret noop --genesis genesis.json --peer 172.29.1.2:44668"
     networks:
       anoma_test_net:
     depends_on:

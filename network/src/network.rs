@@ -303,6 +303,16 @@ impl Network {
       "topic" => msg.topic.clone()
     );
 
+    let topic = match self.topics.get_mut(&msg.topic) {
+      Some(topic) => topic,
+      None => {
+        // a peer is sending message on an unrecognized topic
+        // this is a protocol violation.
+        self.ban_peer(from);
+        return;
+      }
+    };
+
     // if deduplication is enabled and we've seen this message
     // recently, then ignore it and don't propagate to topics.
     if let Some(ref mut history) = self.history {
@@ -323,25 +333,20 @@ impl Network {
       // peer -> connectionid -> topic mapping.
       // signal to the topic that a peer was connected before
       // routing any messages
-      if let Some(topic) = self.topics.get_mut(&msg.topic) {
-        topic.inject_event(topic::Event::PeerConnected(peer, connection));
-      } else {
-        // a peer is sending message on an unrecognized topic
-        // this is a protocol violation.
-        self.ban_peer(from);
-        return;
-      }
+      topic.inject_event(topic::Event::PeerConnected(peer, connection));
     }
 
-    if let Some(topic) = self.muxer.resolve_topic(&from, &connection) {
-      if let Some(topic) = self.topics.get_mut(topic) {
-        topic
-          .inject_event(topic::Event::MessageReceived(from, msg, connection));
-      } else {
-        self.ban_peer(from);
-      }
+    let topic_name = self
+      .muxer
+      .resolve_topic(&from, &connection)
+      .expect("The connection ID should be mapped by now");
+
+    if *topic_name == msg.topic {
+      topic.inject_event(topic::Event::MessageReceived(from, msg, connection));
     } else {
-      unreachable!("It would have terminated for unassigned topics");
+      // seems like this sender started sending messages with a different
+      // topic name on the same connection. This is a protocol violation.
+      self.ban_peer(from);
     }
   }
 
