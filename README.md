@@ -1,4 +1,4 @@
-# Anoma Blockchain prototye
+# Anoma Blockchain Alpha Version
 
 This prototype aims to reproduce the following topology:
 
