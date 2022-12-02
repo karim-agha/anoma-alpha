@@ -85,7 +85,7 @@ struct TopicInner {
   this_node: AddressablePeer,
 
   /// Events emitted to listeners on new messages received on this topic.
-  outmsgs: Channel<Bytes>,
+  outmsgs: Channel<Vec<u8>>,
 
   /// Commands to the network layer
   cmdtx: UnboundedSender<Command>,
@@ -153,8 +153,9 @@ pub struct Topic {
 // Public API
 impl Topic {
   /// Propagate a message to connected active peers
-  pub fn gossip(&self, data: Bytes) {
+  pub fn gossip(&self, data: Vec<u8>) {
     let inner = self.inner.read();
+    let data: Bytes = data.into();
     for (peer, (connection, _)) in inner.active_peers.iter() {
       inner.send_message(
         *peer,
@@ -1136,8 +1137,6 @@ impl TopicInner {
       "gossip_count",
       "topic" => self.topic_config.name.clone());
 
-    self.outmsgs.send(msg.clone());
-
     for (peer, (connection, _)) in self.active_peers.iter() {
       if *peer != sender {
         self.send_message(
@@ -1150,6 +1149,8 @@ impl TopicInner {
         );
       }
     }
+
+    self.outmsgs.send(msg.into());
   }
 }
 
@@ -1242,7 +1243,7 @@ impl TopicInner {
 }
 
 impl Stream for Topic {
-  type Item = Bytes;
+  type Item = Vec<u8>;
 
   fn poll_next(
     self: Pin<&mut Self>,

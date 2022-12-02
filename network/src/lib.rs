@@ -13,8 +13,7 @@ mod wire;
 pub mod topic;
 
 pub use {
-  bytes::Bytes,
   config::Config,
   libp2p::core::identity::Keypair,
-  network::Network,
+  network::{Error, Network},
 };

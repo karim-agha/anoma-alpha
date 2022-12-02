@@ -1,6 +1,6 @@
 [workspace]
-members = ["network", "primitives", "solver", "validator"]
-default-members = ["solver", "validator"]
+members = ["network", "primitives", "solver", "validator", "vm"]
+default-members = ["solver", "validator", "primitives", "vm"]
 
 [profile.release]
 debug = true

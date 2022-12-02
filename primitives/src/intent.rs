@@ -1,47 +1,53 @@
 use {
-  crate::PredicateTree,
-  ed25519_dalek::{Keypair, SecretKey, Signature, Signer},
+  crate::{PredicateTree, ToBase58String},
   multihash::{Hasher, Multihash, MultihashDigest, Sha3_256},
-  num::BigUint,
   once_cell::sync::OnceCell,
   serde::{Deserialize, Serialize},
+  std::{collections::BTreeMap, fmt::Debug},
 };
 
-/// Intents are partial signatures created by users describing what state
+/// Intents are partial transactions created by users describing what state
 /// transition they want to achieve.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Intent {
-  /// A predicate bool expression tree that must evaluate to `true` when
-  /// included in a transaction before a state transition is premitted. A
-  /// transaction must satisfy all predicate trees of accounts that change
-  /// state and the predicate tree of the intent before it is allowed to
-  /// mutate sate in accounts.
-  predicates: PredicateTree,
+  /// Hash of a block within the last 2 epochs.
+  /// Intents that have this value pointing to a
+  /// block that is older then 2 epochs are expired
+  /// and rejected by the chain.
+  pub recent_blockhash: Multihash,
+  pub expectations: PredicateTree,
 
-  /// The total amount of fees the intent producer is willing to pay for
-  /// relaying and solving this intent. Actual distribution of fees between
-  /// relayers (hops) and the solver is described in the envelope that carries
-  /// intents between hops.
-  ///
-  /// Each relayer must make sure to leave enough of the remaining fee for
-  /// other relayers to incentivise further relays and all relayers through
-  /// all hops must make sure that there is enough fee remaining for the
-  /// solver to have an incentive to provide a solution for this intent.
-  fees: BigUint,
+  /// If any of the calldata entries is a signature,
+  /// it should sign the recent_blockhash value.
+  pub calldata: BTreeMap<String, Vec<u8>>,
 
-  /// A list of signatures attached to an intent.
-  /// ```
-  /// signature = sign(prvkey, self.partial_hash());
-  /// ```
-  signatures: Vec<Signature>,
-
-  /// Hash of all elements except signatures.
-  ///
-  /// This value is used to compute signatures attached to an intent.
-  /// This value is computed only once on first call and then cached
-  /// for subsequent invocations.
   #[serde(skip)]
-  partial_hash: OnceCell<Multihash>,
+  hash_cache: OnceCell<Multihash>,
+}
+
+impl Intent {
+  pub fn new(
+    recent_blockhash: Multihash,
+    expectations: PredicateTree,
+    calldata: BTreeMap<String, Vec<u8>>,
+  ) -> Self {
+    Self {
+      recent_blockhash,
+      expectations,
+      calldata,
+      hash_cache: OnceCell::new(),
+    }
+  }
+}
+
+impl Debug for Intent {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("Intent")
+      .field("expectations", &self.expectations)
+      .field("calldata", &self.calldata)
+      .field("hash", &self.hash().to_b58())
+      .finish()
+  }
 }
 
 impl Intent {
@@ -50,31 +56,12 @@ impl Intent {
   /// This value is used to compute signatures attached to an intent.
   /// This value is computed only once on first call and then cached
   /// for subsequent invocations.
-  fn partial_hash(&self) -> &Multihash {
-    self.partial_hash.get_or_init(|| {
+  pub fn hash(&self) -> &Multihash {
+    self.hash_cache.get_or_init(|| {
       let mut hasher = Sha3_256::default();
-      hasher.update(&bincode::serialize(&self.fees).unwrap());
-      hasher.update(&bincode::serialize(&self.predicates).unwrap());
+      hasher.update(&bincode::serialize(&self.expectations).unwrap());
+      hasher.update(&bincode::serialize(&self.calldata).unwrap());
       multihash::Code::Sha3_256.wrap(hasher.finalize()).unwrap()
     })
-  }
-
-  /// Given a secret key, it appends a new signature to the intent.
-  ///
-  /// usage:
-  /// ```
-  /// let mut intent = Intent { ... };
-  /// intent.attach_signature(privkey1);
-  /// intent.attach_signature(privkey2);
-  /// ```
-  pub fn append_signature(&mut self, secret: SecretKey) {
-    let keypair = Keypair {
-      public: (&secret).into(),
-      secret,
-    };
-
-    self
-      .signatures
-      .push(keypair.sign(&self.partial_hash().to_bytes()));
   }
 }

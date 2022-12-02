@@ -5,9 +5,17 @@ use {
 
 /// Represents the basic unit of storage and state verification in Anoma.
 ///
-/// An account stores arbitary data that must satisfy all its predicates.
+/// An account stores arbitary data that must satisfy all its predicates, and
+/// its parents predicates before a mutation is allowed to happen.
+///
 /// Accounts may store WASM code that acts as predicates for other accounts.
-#[derive(Debug, Serialize, Deserialize)]
+///
+/// Accounts are organized in a hierarchical path-like structure. For example
+/// if there is a token type defined at account "/token/usda" and there is
+/// wallet balance account defined at "/token/usda/walletaddress1", then any
+/// modification to the latter will trigger validity predicates stored at
+/// addresses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Account {
   /// Arbitary data stored within an account, this could be some token
   /// balance for a user wallet, wasm bytecode that acts as a predicate,
@@ -24,7 +32,7 @@ pub struct Account {
   ///
   /// Any state write will invoke all predicates and occurs only if they all
   /// return true, otherwise state change is rejected.
-  state: Vec<u8>,
+  pub state: Vec<u8>,
 
   /// A Boolean Expressions Tree of predicates for an account.
   ///
@@ -33,5 +41,5 @@ pub struct Account {
   /// and they can run in parallel. Some predicates may not run at all if a
   /// short-circut result is found. They are read-only functions, so
   /// execution order is irrelevant for the final result.
-  predicates: PredicateTree,
+  pub predicates: PredicateTree,
 }

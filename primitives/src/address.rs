@@ -1,109 +1,133 @@
 use {
-  curve25519_dalek::edwards::CompressedEdwardsY,
-  ed25519_dalek::PublicKey,
-  multihash::{Hasher, Sha3_256},
   serde::{Deserialize, Serialize},
   std::{
     fmt::{Debug, Display},
-    ops::Deref,
     str::FromStr,
   },
+  thiserror::Error,
 };
 
-/// Represents an address of an account.
-///
-/// The same address could either represent a user wallet that
-/// has a corresponding private key on the ed25519 curve (externally owned)
-/// or a app/contract account that is not on the curve and is writable
-/// only by the app owning it.
-///
-/// Accounts may optionally store data, like balances, etc.
-///
-/// Here's an example that involves using accounts:
-///
-///   - Say we have a user identified by address 0xAAA
-///   - We also have an asset address identified by address 0xBBB
-///   - in this case if we want to get user's account balance we do:
-///     - address(0xAAA).derive(0xBBB) gives us 0xCCC
-///     - read the contents of 0xCCC
-///     - the Validity predicate on the derived account should be:
-///       - if the new balance value is lower than current value, assert that
-///         the tx contains 0xAAA's signature.
-#[derive(
-  Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
-pub struct Address([u8; 32]);
+#[derive(Debug, Clone, Error, PartialEq)]
+pub enum Error {
+  #[error("path cannot be empty or root")]
+  EmptyPath,
 
-impl Address {
-  /// Given a list of seeds this method will generate a new
-  /// derived address that is not on the Ed25519 curve
-  /// (no private key exists for the resulting address).
-  ///
-  /// This method is used to generate addresses that are
-  /// related to some original address but manipulated by
-  /// contracts.
-  ///
-  /// The same set of seeds will always return the same
-  /// derived address, so it can be used as a hashmap
-  /// in contracts.
-  pub fn derive(&self, seeds: &[&[u8]]) -> Self {
-    let mut bump: u64 = 0;
-    loop {
-      let mut hasher = Sha3_256::default();
-      hasher.update(&self.0);
-      for seed in seeds.iter() {
-        hasher.update(seed);
-      }
-      hasher.update(&bump.to_le_bytes());
-      let key = Address(hasher.finalize().try_into().unwrap());
-      if !key.has_private_key() {
-        return key;
-      } else {
-        bump += 1;
-      }
+  #[error("path segment cannot be empty")]
+  EmptyPathSegment,
+
+  #[error("account paths must start with a slash '/'")]
+  MissingStartingSlash,
+
+  #[error("account path cannot end with a slash '/'")]
+  InvalidEndingSlash,
+
+  #[error("invalid character in path: {0}")]
+  InvalidCharacter(char),
+}
+
+#[derive(Clone)]
+pub struct AncestorIterator {
+  current: Address,
+}
+
+impl AncestorIterator {
+  fn new(addr: Address) -> Self {
+    Self { current: addr }
+  }
+}
+
+impl Iterator for AncestorIterator {
+  type Item = Address;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    let path = &self.current.0;
+    let slash_pos = path.len()
+      - 1
+      - path
+        .chars()
+        .rev()
+        .position(|c| c == '/')
+        .expect("address constructor is allowing invalid addresses");
+
+    if slash_pos == 0 {
+      None
+    } else {
+      self.current = Address(path.chars().take(slash_pos).collect());
+      Some(self.current.clone())
     }
   }
-
-  /// Checks if the given address lies on the Ed25519 elliptic curve.
-  ///
-  /// When true, then it means that there exists a private key that
-  /// make up together a valid Ed25519 keypair. Otherwise, when false
-  /// it means that there is no corresponding valid private key.
-  ///
-  /// This is useful in cases we want to make sure that an account
-  /// could not be ever modified except by the contract owning it, as
-  /// it is not possible to have a signer of a transaction that will
-  /// give write access to an account.
-  fn has_private_key(&self) -> bool {
-    CompressedEdwardsY::from_slice(&self.0)
-      .decompress()
-      .is_some()
-  }
 }
 
-impl AsRef<[u8]> for Address {
-  fn as_ref(&self) -> &[u8] {
-    &self.0
+/// Represents an address of an account.
+#[derive(
+  Clone, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord,
+)]
+pub struct Address(String);
+
+impl Address {
+  /// Creates new address from a string.
+  ///
+  /// Valid paths are alphanumeric strings and slashes /.
+  /// Paths must start with a slash and cannot end with a slash.
+  ///
+  /// Paths are hierarchical, e.g. /a/b is a child of /a
+  /// so any modification attempt to /a/b will also trigger
+  /// /a validity predicates as well as /a/b before it is allowed
+  /// to go through.
+  pub fn new(path: impl AsRef<str>) -> Result<Self, Error> {
+    let path: String = path.as_ref().into();
+
+    let mut segment_len = 0;
+    let mut chars = path.chars();
+
+    if let Some(first) = chars.next() {
+      if first != '/' {
+        return Err(Error::MissingStartingSlash);
+      }
+    } else {
+      return Err(Error::EmptyPath);
+    }
+
+    for c in chars {
+      if c == '/' {
+        if segment_len == 0 {
+          return Err(Error::EmptyPathSegment);
+        }
+        segment_len = 0;
+      } else {
+        segment_len += 1;
+      }
+
+      if !(c.is_alphanumeric() || c == '/') {
+        return Err(Error::InvalidCharacter(c));
+      }
+    }
+
+    if segment_len == 0 {
+      return Err(Error::InvalidEndingSlash);
+    }
+
+    Ok(Self(path))
   }
-}
 
-impl Deref for Address {
-  type Target = [u8];
+  pub fn ancestors(&self) -> AncestorIterator {
+    AncestorIterator::new(self.clone())
+  }
 
-  fn deref(&self) -> &Self::Target {
-    &self.0
+  pub fn combine(&self, segment: impl AsRef<str>) -> Result<Self, Error> {
+    Address::new(format!("{}/{}", self.0, segment.as_ref()))
   }
 }
 
 impl Display for Address {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    write!(f, "{}", bs58::encode(self.0).into_string())
+    write!(f, "{}", self.0.as_str())
   }
 }
 
 impl Debug for Address {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    write!(f, "address({})", bs58::encode(self.0).into_string())
+    write!(f, "address({})", &self.0)
   }
 }
 
@@ -114,31 +138,64 @@ impl From<Address> for String {
 }
 
 impl FromStr for Address {
-  type Err = bs58::decode::Error;
+  type Err = Error;
 
   fn from_str(s: &str) -> Result<Self, Self::Err> {
-    let mut bytes = [0u8; 32];
-    bs58::decode(s).into(&mut bytes)?;
-    Ok(Self(bytes))
+    Address::new(s)
   }
 }
 
-impl TryFrom<&str> for Address {
-  type Error = bs58::decode::Error;
+#[cfg(test)]
+mod tests {
+  use crate::{address::Error, Address};
 
-  fn try_from(value: &str) -> Result<Self, Self::Error> {
-    FromStr::from_str(value)
+  #[test]
+  fn construction() {
+    assert!(Address::new("/token").is_ok());
+    assert!(Address::new("/token/usda").is_ok());
+    assert!(Address::new("/token/usda/walletaddr1").is_ok());
+
+    assert_eq!(Address::new(""), Err(Error::EmptyPath));
+    assert_eq!(Address::new("token"), Err(Error::MissingStartingSlash));
+    assert_eq!(Address::new("/token/"), Err(Error::InvalidEndingSlash));
+    assert_eq!(Address::new("//token"), Err(Error::EmptyPathSegment));
+    assert_eq!(Address::new("/inval$id"), Err(Error::InvalidCharacter('$')));
   }
-}
 
-impl From<PublicKey> for Address {
-  fn from(p: PublicKey) -> Self {
-    Self(*p.as_bytes())
+  #[test]
+  fn ancestors() -> Result<(), Error> {
+    let address = Address::new("/token/usda/walletaddr1")?;
+    let ancestors = address.ancestors();
+
+    let mut ancestors_vec = vec![];
+    for anc in ancestors {
+      ancestors_vec.push(anc);
+    }
+
+    assert_eq!(ancestors_vec.len(), 2);
+    assert_eq!(Address::new("/token")?, ancestors_vec[1]);
+    assert_eq!(Address::new("/token/usda")?, ancestors_vec[0]);
+
+    Ok(())
   }
-}
 
-impl From<[u8; 32]> for Address {
-  fn from(value: [u8; 32]) -> Self {
-    Self(value)
+  #[test]
+  fn combine() -> Result<(), Error> {
+    let token = Address::new("/token")?;
+    let token_usda = token.combine("usda")?;
+    let token_usda_wallet = token_usda.combine("walletaddr1")?;
+
+    assert_eq!(token.ancestors().count(), 0);
+    assert_eq!(token_usda.ancestors().count(), 1);
+    assert_eq!(token_usda_wallet.ancestors().count(), 2);
+
+    assert_eq!(token.to_string(), "/token".to_string());
+    assert_eq!(token_usda.to_string(), "/token/usda".to_string());
+    assert_eq!(
+      token_usda_wallet.to_string(),
+      "/token/usda/walletaddr1".to_string()
+    );
+
+    Ok(())
   }
 }
