@@ -1,3 +1,6 @@
+#![cfg_attr(target_family = "wasm", no_std)]
+extern crate alloc;
+
 mod account;
 mod address;
 mod b58;
@@ -7,9 +10,9 @@ mod transaction;
 
 pub use {
   account::Account,
-  address::Address,
+  address::{Address, Error as AddressError},
   b58::ToBase58String,
   intent::Intent,
-  predicate::{Predicate, PredicateTree, Code},
+  predicate::{Code, Param, Predicate, PredicateTree},
   transaction::Transaction,
 };

@@ -1,27 +1,15 @@
 use {
+  alloc::{str::FromStr, string::String},
+  core::fmt::{Debug, Display},
   serde::{Deserialize, Serialize},
-  std::{
-    fmt::{Debug, Display},
-    str::FromStr,
-  },
-  thiserror::Error,
 };
 
-#[derive(Debug, Clone, Error, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Error {
-  #[error("path cannot be empty or root")]
   EmptyPath,
-
-  #[error("path segment cannot be empty")]
   EmptyPathSegment,
-
-  #[error("account paths must start with a slash '/'")]
   MissingStartingSlash,
-
-  #[error("account path cannot end with a slash '/'")]
   InvalidEndingSlash,
-
-  #[error("invalid character in path: {0}")]
   InvalidCharacter(char),
 }
 
@@ -115,18 +103,21 @@ impl Address {
   }
 
   pub fn combine(&self, segment: impl AsRef<str>) -> Result<Self, Error> {
-    Address::new(format!("{}/{}", self.0, segment.as_ref()))
+    let mut combined = self.0.clone();
+    combined.push('/');
+    combined.push_str(segment.as_ref());
+    Address::new(combined)
   }
 }
 
 impl Display for Address {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     write!(f, "{}", self.0.as_str())
   }
 }
 
 impl Debug for Address {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     write!(f, "address({})", &self.0)
   }
 }

@@ -1,3 +1,6 @@
+use alloc::string::String;
+use alloc::vec::Vec;
+
 pub trait ToBase58String {
   fn to_b58(&self) -> String;
 }

@@ -1,0 +1,12 @@
+[package]
+name = "anoma-predicates-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Anoma on-chain predicates SDK"
+
+[lib]
+doctest = false
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+anoma-primitives = { path = "../../primitives" }

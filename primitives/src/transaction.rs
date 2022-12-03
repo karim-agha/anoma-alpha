@@ -1,5 +1,7 @@
 use {
   crate::{Account, Address, Intent, PredicateTree},
+  alloc::vec::Vec,
+  core::fmt::Debug,
   ed25519_dalek::Signature,
   serde::{Deserialize, Serialize},
 };
@@ -31,6 +33,7 @@ mod tests {
   use {
     super::AccountChange,
     crate::{
+      address,
       predicate::{Code, Param},
       Account,
       Address,
@@ -41,7 +44,6 @@ mod tests {
     },
     ed25519_dalek::Signature,
     multihash::Multihash,
-    std::collections::BTreeMap,
   };
 
   struct MockBlockchain {}
@@ -64,7 +66,7 @@ mod tests {
     }
   }
 
-  fn create_mock_blockchain() -> anyhow::Result<MockBlockchain> {
+  fn create_mock_blockchain() -> Result<MockBlockchain, address::Error> {
     let mut blockchain = MockBlockchain {};
 
     // make the entire /predicates/std namespace immutable
@@ -116,7 +118,7 @@ mod tests {
 
   #[test]
   #[ignore]
-  fn token_transfer() -> anyhow::Result<()> {
+  fn token_transfer() -> Result<(), address::Error> {
     // original balances:
     // bob [0x0239d...]: 15 USDA
     // alice [0x736b6...]: 6 USDA
@@ -160,10 +162,9 @@ mod tests {
       ],
     };
 
-    let calldata: BTreeMap<_, _> =
-      [("signature".into(), b"bob-signature".to_vec())]
-        .into_iter()
-        .collect();
+    let calldata: Vec<_> = [("signature".into(), b"bob-signature".to_vec())]
+      .into_iter()
+      .collect();
 
     // send 5 USDA tokens from 0x0239d... to 0x736b6...
     let intent = Intent::new(
@@ -196,7 +197,7 @@ mod tests {
       ],
       producer: (
         Address::new("/wallet/0xf573d99385C05c23B24ed33De616ad16a43a0919")?,
-        Signature::from_bytes(&[])?,
+        Signature::from_bytes(&[]).unwrap(),
       ),
     };
 

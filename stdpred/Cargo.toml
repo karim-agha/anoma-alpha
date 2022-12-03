@@ -1,0 +1,19 @@
+[package]
+name = "stdpred"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.65"
+description = "Anoma Standard Predicate Library"
+
+[lib]
+doctest = false
+crate-type = ["cdylib"]
+
+[dependencies]
+anoma-predicates-sdk = { path = "../sdk/predicates" }
+
+[dev-dependencies]
+anyhow = "1"
+
+[build-dependencies]
+anoma-predicates-sdk = { path = "../sdk/predicates" }

@@ -1,5 +1,7 @@
 use {
   crate::Address,
+  alloc::{boxed::Box, string::String, vec::Vec},
+  core::fmt::Debug,
   serde::{Deserialize, Serialize},
 };
 

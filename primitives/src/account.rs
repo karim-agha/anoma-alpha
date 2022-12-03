@@ -1,5 +1,6 @@
 use {
   crate::PredicateTree,
+  alloc::vec::Vec,
   serde::{Deserialize, Serialize},
 };
 

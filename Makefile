@@ -4,7 +4,7 @@ build:
 	@cargo build --release
 
 test:
-	@cargo test
+	@cargo test --all
 
 fmt:
 	@cargo +nightly fmt --all

@@ -1,6 +1,15 @@
 [workspace]
-members = ["network", "primitives", "solver", "validator", "vm"]
-default-members = ["solver", "validator", "primitives", "vm"]
+members = [
+  "network",
+  "primitives",
+  "solver",
+  "validator",
+  "vm",
+  "stdpred",
+  "sdk/predicates",
+]
+default-members = ["solver", "validator"]
 
 [profile.release]
 debug = true
+lto = true

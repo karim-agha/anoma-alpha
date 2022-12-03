@@ -1,3 +1,7 @@
+mod runtime;
 mod state;
 
-pub use state::{InMemoryStateStore, State, StateDiff};
+pub use {
+  runtime::{evaluate, Error as RuntimeError},
+  state::{InMemoryStateStore, State, StateDiff},
+};

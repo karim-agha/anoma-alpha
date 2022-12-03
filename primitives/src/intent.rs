@@ -1,9 +1,10 @@
 use {
   crate::{PredicateTree, ToBase58String},
+  alloc::{string::String, vec::Vec},
+  core::fmt::Debug,
   multihash::{Hasher, Multihash, MultihashDigest, Sha3_256},
   once_cell::sync::OnceCell,
   serde::{Deserialize, Serialize},
-  std::{collections::BTreeMap, fmt::Debug},
 };
 
 /// Intents are partial transactions created by users describing what state
@@ -19,7 +20,7 @@ pub struct Intent {
 
   /// If any of the calldata entries is a signature,
   /// it should sign the recent_blockhash value.
-  pub calldata: BTreeMap<String, Vec<u8>>,
+  pub calldata: Vec<(String, Vec<u8>)>,
 
   #[serde(skip)]
   hash_cache: OnceCell<Multihash>,
@@ -29,7 +30,7 @@ impl Intent {
   pub fn new(
     recent_blockhash: Multihash,
     expectations: PredicateTree,
-    calldata: BTreeMap<String, Vec<u8>>,
+    calldata: Vec<(String, Vec<u8>)>,
   ) -> Self {
     Self {
       recent_blockhash,
@@ -41,7 +42,7 @@ impl Intent {
 }
 
 impl Debug for Intent {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     f.debug_struct("Intent")
       .field("expectations", &self.expectations)
       .field("calldata", &self.calldata)
