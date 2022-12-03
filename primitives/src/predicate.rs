@@ -16,7 +16,7 @@ pub enum Param {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Code {
   Inline(Vec<u8>),
-  AccountRef(Address),
+  AccountRef(Address, String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,24 +1,29 @@
-#![cfg_attr(target_family = "wasm", no_std)]
+#![no_std]
 
-// panic handler
-pub use anoma_predicates_sdk;
+use anoma_predicates_sdk::{initialize_library, predicate, Param, Transaction};
 
-#[no_mangle]
-pub extern "C" fn r#const(a: u32, b: u32) -> u32 {
-  a + b
+initialize_library!();
+
+#[predicate]
+fn constant(_params: &[Param], _transaction: &Transaction) -> bool {
+  true
 }
 
-#[no_mangle]
-pub extern "C" fn uint_greater_than_by(a: u32, b: u32) -> u32 {
-  a + b
+#[predicate]
+
+fn uint_greater_than_by(_params: &[Param], _transaction: &Transaction) -> bool {
+  true
 }
 
-#[no_mangle]
-pub extern "C" fn uint_less_than_by(a: u32, b: u32) -> u32 {
-  a + b
+#[predicate]
+fn uint_less_than_by(_params: &[Param], _transaction: &Transaction) -> bool {
+  true
 }
 
-#[no_mangle]
-pub extern "C" fn verify_ed25519_signature(a: u32, b: u32) -> u32 {
-  a + b
+#[predicate]
+fn verify_ed25519_signature(
+  _params: &[Param],
+  _transaction: &Transaction,
+) -> bool {
+  true
 }

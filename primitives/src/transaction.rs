@@ -42,6 +42,7 @@ mod tests {
       PredicateTree,
       Transaction,
     },
+    alloc::collections::BTreeMap,
     ed25519_dalek::Signature,
     multihash::Multihash,
   };
@@ -77,42 +78,10 @@ mod tests {
     blockchain.set_account(Address::new("/predicates/std")?, Account {
       state: vec![],
       predicates: PredicateTree::Id(Predicate {
-        code: Code::AccountRef(Address::new("/predicates/std/const")?),
-        params: vec![Param::Inline(b"\0".to_vec())], // immutable
-      }),
-    });
-
-    blockchain.set_account(Address::new("/predicates/std/const")?, Account {
-      state: b"wasm-bytecode-always-return-valueof-param-0".to_vec(),
-      predicates: PredicateTree::Id(Predicate {
-        // immutable account
-        code: Code::Inline(b"wasm-bytecode-always-return-false".to_vec()),
+        code: Code::Inline(b"wasm-always-return-false".to_vec()), // immutable
         params: vec![],
       }),
     });
-
-    blockchain.set_account(
-      Address::new("/predicates/std/uint-less-than-by")?,
-      Account {
-        state: b"todo-wasm-bytecode".to_vec(),
-        predicates: PredicateTree::Id(Predicate {
-          code: Code::AccountRef(Address::new("/predicates/std/const")?),
-          params: vec![Param::Inline(b"\0".to_vec())], // immutable
-        }),
-      },
-    );
-
-    blockchain.set_account(
-      Address::new("/predicates/std/uint-greater-than-by")?,
-      Account {
-        state: b"todo-wasm-bytecode".to_vec(),
-        predicates: PredicateTree::Id(Predicate {
-          code: Code::AccountRef(Address::new("/predicates/std/const")?),
-          params: vec![Param::Inline(b"\0".to_vec())], // immutable
-        }),
-      },
-    );
-
     Ok(blockchain)
   }
 
@@ -133,9 +102,10 @@ mod tests {
 
     // bob decremented by 10 USDA:
     let expectation_bob_tokens_decremented = Predicate {
-      code: Code::AccountRef(Address::new(
-        "/predicates/std/uint-less-than-by",
-      )?),
+      code: Code::AccountRef(
+        Address::new("/predicates/std")?,
+        "uint_less_than_by".into(),
+      ),
       params: vec![
         Param::ProposalRef(Address::new(
           "/token/usda/0x0239d39F0c3F9b26cF728bC6b09872C090935E9f",
@@ -148,9 +118,10 @@ mod tests {
     };
 
     let expectation_alice_tokens_incremented = Predicate {
-      code: Code::AccountRef(Address::new(
-        "/predicates/std/uint-greater-than-by",
-      )?),
+      code: Code::AccountRef(
+        Address::new("/predicates/std")?,
+        "uint_greater_than_by".into(),
+      ),
       params: vec![
         Param::ProposalRef(Address::new(
           "/token/usda/0x736b6858924eeEBE82a6269baC237255e42DE2B0",
@@ -162,9 +133,10 @@ mod tests {
       ],
     };
 
-    let calldata: Vec<_> = [("signature".into(), b"bob-signature".to_vec())]
-      .into_iter()
-      .collect();
+    let calldata: BTreeMap<_, _> =
+      [("signature".into(), b"bob-signature".to_vec())]
+        .into_iter()
+        .collect();
 
     // send 5 USDA tokens from 0x0239d... to 0x736b6...
     let intent = Intent::new(

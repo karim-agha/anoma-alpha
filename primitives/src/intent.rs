@@ -1,6 +1,6 @@
 use {
   crate::{PredicateTree, ToBase58String},
-  alloc::{string::String, vec::Vec},
+  alloc::{collections::BTreeMap, string::String, vec::Vec},
   core::fmt::Debug,
   multihash::{Hasher, Multihash, MultihashDigest, Sha3_256},
   once_cell::sync::OnceCell,
@@ -20,7 +20,7 @@ pub struct Intent {
 
   /// If any of the calldata entries is a signature,
   /// it should sign the recent_blockhash value.
-  pub calldata: Vec<(String, Vec<u8>)>,
+  pub calldata: BTreeMap<String, Vec<u8>>,
 
   #[serde(skip)]
   hash_cache: OnceCell<Multihash>,
@@ -30,7 +30,7 @@ impl Intent {
   pub fn new(
     recent_blockhash: Multihash,
     expectations: PredicateTree,
-    calldata: Vec<(String, Vec<u8>)>,
+    calldata: BTreeMap<String, Vec<u8>>,
   ) -> Self {
     Self {
       recent_blockhash,

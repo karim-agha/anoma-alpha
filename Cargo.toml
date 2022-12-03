@@ -7,9 +7,14 @@ members = [
   "vm",
   "stdpred",
   "sdk/predicates",
+  "sdk/predicates/derive",
 ]
 default-members = ["solver", "validator"]
 
 [profile.release]
-debug = true
-lto = true
+debug = false
+lto = "thin"
+opt-level = 3
+strip = true
+codegen-units = 1
+incremental = false
