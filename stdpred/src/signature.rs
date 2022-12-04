@@ -21,10 +21,12 @@ fn verify_ed25519_signature(
   assert_eq!(params.len(), 2);
 
   let mut args = params.iter();
-  let pubkey = PublicKey::from_bytes(args.next().expect("asserted").data())
-    .expect("invalid public key format");
-  let signature = Signature::from_bytes(args.next().expect("asserted").data())
-    .expect("invalid signature format");
+  let pubkey: PublicKey =
+    rmp_serde::from_slice(args.next().expect("asserted").data())
+      .expect("invalid public key format");
+  let signature: Signature =
+    rmp_serde::from_slice(args.next().expect("asserted").data())
+      .expect("invalid signature format");
 
   let trigger = transaction.get(trigger).expect(
     "The virtual machine encoded an invalid trigger reference. This is a bug \

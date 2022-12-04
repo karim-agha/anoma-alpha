@@ -16,6 +16,7 @@ ed25519-dalek = { version = "1", features = [
   "serde",
   "u64_backend",
 ] }
+rmp-serde = { version = "1.1", default-features = false }
 
 [dev-dependencies]
 anyhow = "1"

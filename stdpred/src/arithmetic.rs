@@ -13,10 +13,10 @@ fn uint_equal(params: &[PopulatedParam], _: &Trigger, _: &Transaction) -> bool {
   first == second
 }
 
-/// Takes two 64bit unsigned (little endian) arguments and varifies that first
+/// Takes two 64bit unsigned arguments and varifies that first
 /// is > than second integers.
 #[predicate]
-fn uint_gt(params: &[PopulatedParam], _: &Trigger, _: &Transaction) -> bool {
+fn uint_greater_than(params: &[PopulatedParam], _: &Trigger, _: &Transaction) -> bool {
   assert_eq!(params.len(), 2);
 
   let mut it = params.iter();
@@ -29,7 +29,7 @@ fn uint_gt(params: &[PopulatedParam], _: &Trigger, _: &Transaction) -> bool {
 /// Takes two 64bit unsigned (little endian) arguments and varifies that first
 /// is >= than second integers.
 #[predicate]
-fn uint_gte(params: &[PopulatedParam], _: &Trigger, _: &Transaction) -> bool {
+fn uint_greater_than_equal(params: &[PopulatedParam], _: &Trigger, _: &Transaction) -> bool {
   assert_eq!(params.len(), 2);
 
   let mut it = params.iter();
@@ -39,10 +39,10 @@ fn uint_gte(params: &[PopulatedParam], _: &Trigger, _: &Transaction) -> bool {
   first >= second
 }
 
-/// Takes two 64bit unsigned (little endian) arguments and varifies that first
+/// Takes two 64bit unsigned arguments and varifies that first
 /// is < than second integers.
 #[predicate]
-fn uint_lt(params: &[PopulatedParam], _: &Trigger, _: &Transaction) -> bool {
+fn uint_less_than(params: &[PopulatedParam], _: &Trigger, _: &Transaction) -> bool {
   assert_eq!(params.len(), 2);
 
   let mut it = params.iter();
@@ -55,7 +55,7 @@ fn uint_lt(params: &[PopulatedParam], _: &Trigger, _: &Transaction) -> bool {
 /// Takes two 64bit unsigned (little endian) arguments and varifies that first
 /// is < than second integers.
 #[predicate]
-fn uint_lte(params: &[PopulatedParam], _: &Trigger, _: &Transaction) -> bool {
+fn uint_less_than_equal(params: &[PopulatedParam], _: &Trigger, _: &Transaction) -> bool {
   assert_eq!(params.len(), 2);
 
   let mut it = params.iter();
@@ -102,6 +102,5 @@ fn uint_less_than_by(
 }
 
 fn slice_to_u64(bytes: &[u8]) -> u64 {
-  let array = bytes.try_into().expect("invalid argument");
-  u64::from_le_bytes(array)
+  rmp_serde::from_slice(bytes).expect("invalid argument format")
 }

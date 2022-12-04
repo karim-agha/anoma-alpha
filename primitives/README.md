@@ -1,3 +1,7 @@
 # Anoma shared primitive types
 
-tbd
+This crate defines fundamental Anoma types that are used in:
+- Predicates 
+- Virtual Machine
+- Consensus
+- SDK

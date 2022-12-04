@@ -140,7 +140,7 @@ impl Message {
     self.hash_cache.get_or_init(|| {
       let mut hasher = Sha3_256::default();
       hasher.update(
-        &bincode::serialize(self)
+        &rmp_serde::to_vec(self) //
           .expect("all fields have serializable members"),
       );
       multihash::Code::Sha3_256

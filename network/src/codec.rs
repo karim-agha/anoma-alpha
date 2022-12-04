@@ -4,7 +4,7 @@ use {
   unsigned_varint::codec,
 };
 
-/// All messages are length-prefixed bincode serialized bytes.
+/// All messages are length-prefixed MessagePack serialized bytes.
 pub struct Codec {
   /// prefix all network frames with varint of their length.
   length_prefix: codec::UviBytes,
@@ -15,9 +15,9 @@ impl Codec {
   /// bytes with a varint of its length. This is also used to
   /// invalidate any messages that exceed the allowed message size.
   ///
-  /// Messages are serialized using bincode.
+  /// Messages are serialized using MessagePack.
   ///
-  /// Bincode on its own doesn't know the size of the message
+  /// MessagePack on its own doesn't know the size of the message
   /// without actually serializing/deserializing an object, thus
   /// the varint prefix.
   pub fn new(max_message_len: usize) -> Self {
@@ -43,7 +43,7 @@ impl Encoder for Codec {
     // prepend buffer len varint
     self
       .length_prefix
-      .encode(Bytes::from(bincode::serialize(&item)?), dst)
+      .encode(Bytes::from(rmp_serde::to_vec(&item)?), dst)
       .map_err(|_| upgrade::Error::MaxTransmissionSizeExceeded)
   }
 }
@@ -67,6 +67,6 @@ impl Decoder for Codec {
         None => return Ok(None),
       };
 
-    Ok(Some(bincode::deserialize(&packet)?))
+    Ok(Some(rmp_serde::from_slice(&packet)?))
   }
 }

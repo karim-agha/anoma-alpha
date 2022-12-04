@@ -13,6 +13,16 @@ pub enum AddressError {
   InvalidCharacter(char),
 }
 
+impl core::fmt::Display for AddressError {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    <Self as Debug>::fmt(self, f)
+  }
+}
+
+// https://github.com/rust-lang/rust/issues/103765
+#[cfg(not(target_family = "wasm"))]
+impl std::error::Error for AddressError {}
+
 #[derive(Clone)]
 pub struct AncestorIterator {
   current: Address,

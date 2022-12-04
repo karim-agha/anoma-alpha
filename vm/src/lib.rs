@@ -1,7 +1,8 @@
 mod runtime;
 mod state;
+mod limits;
 
 pub use {
-  runtime::{evaluate, Error as RuntimeError},
+  runtime::{execute, Error as RuntimeError},
   state::{InMemoryStateStore, State, StateDiff},
 };
