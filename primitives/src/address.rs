@@ -5,7 +5,7 @@ use {
 };
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Error {
+pub enum AddressError {
   EmptyPath,
   EmptyPathSegment,
   MissingStartingSlash,
@@ -62,7 +62,7 @@ impl Address {
   /// so any modification attempt to /a/b will also trigger
   /// /a validity predicates as well as /a/b before it is allowed
   /// to go through.
-  pub fn new(path: impl AsRef<str>) -> Result<Self, Error> {
+  pub fn new(path: impl AsRef<str>) -> Result<Self, AddressError> {
     let path: String = path.as_ref().into();
 
     let mut segment_len = 0;
@@ -70,16 +70,16 @@ impl Address {
 
     if let Some(first) = chars.next() {
       if first != '/' {
-        return Err(Error::MissingStartingSlash);
+        return Err(AddressError::MissingStartingSlash);
       }
     } else {
-      return Err(Error::EmptyPath);
+      return Err(AddressError::EmptyPath);
     }
 
     for c in chars {
       if c == '/' {
         if segment_len == 0 {
-          return Err(Error::EmptyPathSegment);
+          return Err(AddressError::EmptyPathSegment);
         }
         segment_len = 0;
       } else {
@@ -87,12 +87,12 @@ impl Address {
       }
 
       if !(c.is_alphanumeric() || c == '/') {
-        return Err(Error::InvalidCharacter(c));
+        return Err(AddressError::InvalidCharacter(c));
       }
     }
 
     if segment_len == 0 {
-      return Err(Error::InvalidEndingSlash);
+      return Err(AddressError::InvalidEndingSlash);
     }
 
     Ok(Self(path))
@@ -102,7 +102,10 @@ impl Address {
     AncestorIterator::new(self.clone())
   }
 
-  pub fn combine(&self, segment: impl AsRef<str>) -> Result<Self, Error> {
+  pub fn combine(
+    &self,
+    segment: impl AsRef<str>,
+  ) -> Result<Self, AddressError> {
     let mut combined = self.0.clone();
     combined.push('/');
     combined.push_str(segment.as_ref());
@@ -129,7 +132,7 @@ impl From<Address> for String {
 }
 
 impl FromStr for Address {
-  type Err = Error;
+  type Err = AddressError;
 
   fn from_str(s: &str) -> Result<Self, Self::Err> {
     Address::new(s)
@@ -138,7 +141,7 @@ impl FromStr for Address {
 
 #[cfg(test)]
 mod tests {
-  use crate::{address::Error, Address};
+  use crate::{address::AddressError, Address};
 
   #[test]
   fn construction() {
@@ -146,15 +149,24 @@ mod tests {
     assert!(Address::new("/token/usda").is_ok());
     assert!(Address::new("/token/usda/walletaddr1").is_ok());
 
-    assert_eq!(Address::new(""), Err(Error::EmptyPath));
-    assert_eq!(Address::new("token"), Err(Error::MissingStartingSlash));
-    assert_eq!(Address::new("/token/"), Err(Error::InvalidEndingSlash));
-    assert_eq!(Address::new("//token"), Err(Error::EmptyPathSegment));
-    assert_eq!(Address::new("/inval$id"), Err(Error::InvalidCharacter('$')));
+    assert_eq!(Address::new(""), Err(AddressError::EmptyPath));
+    assert_eq!(
+      Address::new("token"),
+      Err(AddressError::MissingStartingSlash)
+    );
+    assert_eq!(
+      Address::new("/token/"),
+      Err(AddressError::InvalidEndingSlash)
+    );
+    assert_eq!(Address::new("//token"), Err(AddressError::EmptyPathSegment));
+    assert_eq!(
+      Address::new("/inval$id"),
+      Err(AddressError::InvalidCharacter('$'))
+    );
   }
 
   #[test]
-  fn ancestors() -> Result<(), Error> {
+  fn ancestors() -> Result<(), AddressError> {
     let address = Address::new("/token/usda/walletaddr1")?;
     let ancestors = address.ancestors();
 
@@ -171,7 +183,7 @@ mod tests {
   }
 
   #[test]
-  fn combine() -> Result<(), Error> {
+  fn combine() -> Result<(), AddressError> {
     let token = Address::new("/token")?;
     let token_usda = token.combine("usda")?;
     let token_usda_wallet = token_usda.combine("walletaddr1")?;

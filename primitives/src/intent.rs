@@ -1,5 +1,5 @@
 use {
-  crate::{PredicateTree, ToBase58String},
+  crate::{b58::ToBase58String, PredicateTree},
   alloc::{collections::BTreeMap, string::String, vec::Vec},
   core::fmt::Debug,
   multihash::{Hasher, Multihash, MultihashDigest, Sha3_256},

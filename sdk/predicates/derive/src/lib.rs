@@ -11,7 +11,7 @@ pub fn predicate(_: TokenStream, item: TokenStream) -> TokenStream {
   if !verify_signature(&input_fn) {
     panic!(
       "Expecting predicates to be a function with the following signature: \
-       fn(&[Param], &Transaction) -> bool"
+       fn(&[Param], &Source, &Transaction) -> bool"
     );
   }
 
@@ -24,17 +24,23 @@ fn verify_signature(input_fn: &ItemFn) -> bool {
   let mut argiter = input_fn.sig.inputs.iter();
   let first = argiter.next();
   let second = argiter.next();
+  let third = argiter.next();
   let ret = &input_fn.sig.output;
 
-  let args_ok = match (first, second, input_fn.sig.inputs.len()) {
-    (Some(FnArg::Typed(first)), Some(FnArg::Typed(second)), 2) => {
-      let mut args = (false, false);
+  let args_ok = match (first, second, third, input_fn.sig.inputs.len()) {
+    (
+      Some(FnArg::Typed(first)),
+      Some(FnArg::Typed(second)),
+      Some(FnArg::Typed(third)),
+      3,
+    ) => {
+      let mut args = (false, false, false);
       if let Type::Reference(ref reftype) = *first.ty {
         if reftype.mutability.is_none() {
           if let Type::Slice(ref slice) = *reftype.elem {
             if let Type::Path(ref path) = *slice.elem {
               if let Some(ident) = path.path.segments.last() {
-                if ident.ident == "Param" {
+                if ident.ident == "PopulatedParam" {
                   args.0 = true;
                 }
               }
@@ -47,14 +53,26 @@ fn verify_signature(input_fn: &ItemFn) -> bool {
         if reftype.mutability.is_none() {
           if let Type::Path(ref path) = *reftype.elem {
             if let Some(elem) = path.path.segments.last() {
-              if elem.ident == "Transaction" {
+              if elem.ident == "Trigger" {
                 args.1 = true;
               }
             }
           }
         }
       }
-      args.0 && args.1
+
+      if let Type::Reference(ref reftype) = *third.ty {
+        if reftype.mutability.is_none() {
+          if let Type::Path(ref path) = *reftype.elem {
+            if let Some(elem) = path.path.segments.last() {
+              if elem.ident == "Transaction" {
+                args.2 = true;
+              }
+            }
+          }
+        }
+      }
+      args.0 && args.1 && args.2
     }
     _ => return false,
   };

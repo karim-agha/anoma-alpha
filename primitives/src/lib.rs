@@ -5,14 +5,15 @@ mod account;
 mod address;
 mod b58;
 mod intent;
+mod populated;
 mod predicate;
 mod transaction;
 
 pub use {
-  account::Account,
-  address::{Address, Error as AddressError},
-  b58::ToBase58String,
-  intent::Intent,
-  predicate::{Code, Param, Predicate, PredicateTree},
-  transaction::Transaction,
+  account::*,
+  address::*,
+  intent::*,
+  populated::*,
+  predicate::*,
+  transaction::*,
 };
