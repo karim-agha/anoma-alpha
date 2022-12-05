@@ -21,6 +21,20 @@ pub fn predicate(_: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 fn verify_signature(input_fn: &ItemFn) -> bool {
+  // those exported functions are implemented by the SDK and are
+  // used by the VM to deliver data to predicates before invoking them.
+  let reserved_names = [
+    "__allocate",
+    "__ingest_transaction",
+    "__ingest_params",
+    "__ingest_trigger",
+  ];
+
+  let name: String = input_fn.sig.ident.to_string();
+  if reserved_names.into_iter().any(|n| n == name) {
+    panic!("Predicate is using a reserved name: {}", name);
+  }
+
   let mut argiter = input_fn.sig.inputs.iter();
   let first = argiter.next();
   let second = argiter.next();
