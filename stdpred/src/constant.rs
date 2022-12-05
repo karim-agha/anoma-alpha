@@ -19,16 +19,16 @@ fn constant(params: &[PopulatedParam], _: &Trigger, _: &Transaction) -> bool {
     .expect("invalid argument format")
 }
 
-/// Forbids any changes to the specified account but allows changes to its
-/// children
+/// Forbids any changes to the specified account state but allows changes to its
+/// children or its predicates
 ///
 /// Parameters:
 ///   0. Address of the immutable account
 #[predicate]
-fn immutable(
+fn immutable_state(
   params: &[PopulatedParam],
   trigger: &Trigger,
-  _: &Transaction,
+  tx: &Transaction,
 ) -> bool {
   assert_eq!(params.len(), 1);
   assert!(matches!(trigger, Trigger::Proposal(_))); // only valid on account predicates
@@ -39,12 +39,13 @@ fn immutable(
     rmp_serde::from_slice(params.first().expect("asserted").data())
       .expect("invalid predicate param");
 
-  if let Trigger::Proposal(addr) = trigger {
-    // allow changes only to children of this account but not the account itself
-    target != *addr
-  } else {
-    unreachable!("already asserted that its an account predicate");
+  if let Some(TriggerRef::Proposal(addr, change)) = tx.get(trigger) {
+    if target == *addr && matches!(change, AccountChange::ReplaceState(_)) {
+      return false;
+    }
   }
+
+  true
 }
 
 /// Forbids any changes to the specified account predicates while permitting

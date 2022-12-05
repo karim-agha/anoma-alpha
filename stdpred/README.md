@@ -4,8 +4,10 @@ A set of general purpose predicates that are defined at genesis time. They cover
 
 ## Predicates
 
-#### Id
+#### Const
   - `constant`
+  - `immutable_state`
+  - `immutable_predicates`
 
 #### Arithmetic:
   - `uint_equal`

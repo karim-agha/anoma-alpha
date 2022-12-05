@@ -17,7 +17,7 @@
 //!   - WASM bytecode containing predicates for token instance accounts
 //!
 //!   validity predicate:
-//!   - stdpred/immutable
+//!   - stdpred/immutable_state && stdpred/immutable_predicates
 //!
 //! /token/usdx account
 //!   constructor params:
