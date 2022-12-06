@@ -1,12 +1,10 @@
-use {
-  anoma_predicates_sdk::{
-    predicate,
-    PopulatedParam,
-    Transaction,
-    Trigger,
-    TriggerRef,
-  },
-  ed25519_dalek::{PublicKey, Signature, Verifier},
+use anoma_predicates_sdk::{
+  ed25519::{PublicKey, Signature, Verifier},
+  predicate,
+  ExpandedParam,
+  ExpandedTransaction,
+  Trigger,
+  TriggerRef,
 };
 
 /// Takes three arguments and verifies that the contents of argument at index 1
@@ -14,9 +12,9 @@ use {
 /// value in the Intent.
 #[predicate]
 fn verify_ed25519_signature(
-  params: &[PopulatedParam],
+  params: &[ExpandedParam],
   trigger: &Trigger,
-  transaction: &Transaction,
+  transaction: &ExpandedTransaction,
 ) -> bool {
   assert_eq!(params.len(), 2);
 

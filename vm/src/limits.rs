@@ -39,7 +39,6 @@ impl<T: Tunables> LimitingTunables<T> {
   /// a maximum if missing. The resulting memory type is final if
   /// valid. However, this can produce invalid types, such that
   /// validate_memory must be called before creating the memory.
-
   fn adjust_memory(&self, requested: &MemoryType) -> MemoryType {
     let mut adjusted = *requested;
     adjusted.maximum = Some(self.limit);
@@ -48,7 +47,6 @@ impl<T: Tunables> LimitingTunables<T> {
 
   /// Ensures the a given memory type does not exceed the memory limit.
   /// Call this after adjusting the memory.
-
   fn validate_memory(&self, ty: &MemoryType) -> Result<(), MemoryError> {
     if ty.minimum > self.limit {
       return Err(MemoryError::Generic(format!(
@@ -75,7 +73,6 @@ impl<T: Tunables> Tunables for LimitingTunables<T> {
   /// Construct a `MemoryStyle` for the provided `MemoryType`
   ///
   /// Delegated to base.
-
   fn memory_style(&self, _memory: &MemoryType) -> MemoryStyle {
     // let adjusted = self.adjust_memory(memory);
     // self.base.memory_style(&adjusted)
@@ -97,7 +94,6 @@ impl<T: Tunables> Tunables for LimitingTunables<T> {
   ///
   /// The requested memory type is validated, adjusted to the limited and then
   /// passed to base.
-
   fn create_host_memory(
     &self,
     ty: &MemoryType,
@@ -112,7 +108,6 @@ impl<T: Tunables> Tunables for LimitingTunables<T> {
   /// [`MemoryStyle`].
   ///
   /// Delegated to base.
-
   unsafe fn create_vm_memory(
     &self,
     ty: &MemoryType,
@@ -142,7 +137,6 @@ impl<T: Tunables> Tunables for LimitingTunables<T> {
   /// Create a table owned by the VM given a [`TableType`] and a [`TableStyle`].
   ///
   /// Delegated to base.
-
   unsafe fn create_vm_table(
     &self,
     ty: &TableType,

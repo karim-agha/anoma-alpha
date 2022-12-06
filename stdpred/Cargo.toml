@@ -11,11 +11,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 anoma-predicates-sdk = { path = "../sdk/predicates" }
-ed25519-dalek = { version = "1", features = [
-  "default",
-  "serde",
-  "u64_backend",
-] }
 rmp-serde = { version = "1.1", default-features = false }
 
 [dev-dependencies]

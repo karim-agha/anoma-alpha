@@ -12,6 +12,7 @@ extern "C" {
 pub use {
   anoma_predicates_sdk_macros::{initialize_library, predicate},
   anoma_primitives::*,
+  ed25519_dalek as ed25519,
 };
 
 #[cfg(not(target_family = "wasm"))]

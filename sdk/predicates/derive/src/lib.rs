@@ -11,7 +11,7 @@ pub fn predicate(_: TokenStream, item: TokenStream) -> TokenStream {
   if !verify_signature(&input_fn) {
     panic!(
       "Expecting predicates to be a function with the following signature: \
-       fn(&[Param], &Source, &Transaction) -> bool"
+       fn(&[Param], &Trigger, &Transaction) -> bool"
     );
   }
 
@@ -54,7 +54,7 @@ fn verify_signature(input_fn: &ItemFn) -> bool {
           if let Type::Slice(ref slice) = *reftype.elem {
             if let Type::Path(ref path) = *slice.elem {
               if let Some(ident) = path.path.segments.last() {
-                if ident.ident == "PopulatedParam" {
+                if ident.ident == "ExpandedParam" {
                   args.0 = true;
                 }
               }
@@ -79,7 +79,7 @@ fn verify_signature(input_fn: &ItemFn) -> bool {
         if reftype.mutability.is_none() {
           if let Type::Path(ref path) = *reftype.elem {
             if let Some(elem) = path.path.segments.last() {
-              if elem.ident == "Transaction" {
+              if elem.ident == "ExpandedTransaction" {
                 args.2 = true;
               }
             }
@@ -88,7 +88,7 @@ fn verify_signature(input_fn: &ItemFn) -> bool {
       }
       args.0 && args.1 && args.2
     }
-    _ => return false,
+    _ => false,
   };
 
   if !args_ok {

@@ -1,6 +1,6 @@
 use {
   crate::State,
-  anoma_primitives::{PopulatedPredicate, Transaction, Trigger},
+  anoma_primitives::{Expanded, Predicate, Transaction, Trigger},
   thiserror::Error,
 };
 
@@ -8,9 +8,9 @@ use {
 pub enum Error {}
 
 pub fn execute(
-  _predicate: PopulatedPredicate,
+  _predicate: Predicate<Expanded>,
   _trigger: Trigger,
-  _tx: Transaction,
+  _tx: Transaction<Expanded>,
   _state: &dyn State,
 ) -> Result<bool, Error> {
   todo!()

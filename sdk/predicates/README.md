@@ -11,7 +11,7 @@ Here is an example predicate example implemented using the SDK:
 
 ```rust
 #[predicate]
-fn uint_equal(params: &[PopulatedParam], _: &Trigger, _: &Transaction) -> bool {
+fn uint_equal(params: &[ParamValue], _: &Trigger, _: &Transaction) -> bool {
   assert_eq!(params.len(), 2);
 
   let mut it = params.iter();

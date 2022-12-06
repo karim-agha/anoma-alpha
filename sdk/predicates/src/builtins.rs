@@ -1,12 +1,12 @@
 //#![cfg(target_family = "wasm")]
 
-use anoma_primitives::{Param, Trigger};
+use anoma_primitives::{ExpandedParam, Trigger};
 
 extern crate alloc;
 
 use {
   alloc::{boxed::Box, vec::Vec},
-  anoma_primitives::Transaction,
+  anoma_primitives::ExpandedTransaction,
 };
 
 #[global_allocator]
@@ -24,7 +24,7 @@ pub extern "C" fn allocate(size: u32) -> *mut u8 {
 pub extern "C" fn ingest_transaction(
   ptr: *mut u8,
   len: usize,
-) -> *const Transaction {
+) -> *const ExpandedTransaction {
   let bytes = unsafe { Vec::from_raw_parts(ptr, len, len) };
   let transaction = Box::new(rmp_serde::from_slice(&bytes).expect(
     "The virtual machine encoded an invalid transaction object. This is a bug \
@@ -45,9 +45,12 @@ pub extern "C" fn ingest_trigger(ptr: *mut u8, len: usize) -> *const Trigger {
 
 #[export_name = "__ingest_params"]
 #[allow(improper_ctypes_definitions)] // this is rust to rust across WASM, not rust to C
-pub extern "C" fn ingest_params(ptr: *mut u8, len: usize) -> *const [Param] {
+pub extern "C" fn ingest_params(
+  ptr: *mut u8,
+  len: usize,
+) -> *const [ExpandedParam] {
   let bytes = unsafe { Vec::from_raw_parts(ptr, len, len) };
-  let params: Vec<Param> = rmp_serde::from_slice(&bytes).expect(
+  let params: Vec<ExpandedParam> = rmp_serde::from_slice(&bytes).expect(
     "The virtual machine encoded an invalid params object. This is a bug in \
      Anoma not in your code.",
   );

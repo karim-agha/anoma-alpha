@@ -1,5 +1,5 @@
 use {
-  crate::Address,
+  crate::{Address, Exact, Repr},
   alloc::{boxed::Box, string::String, vec::Vec},
   core::fmt::Debug,
   multihash::Multihash,
@@ -15,23 +15,48 @@ pub enum Param {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ExpandedParam {
+  Inline(Vec<u8>),
+  AccountRef(Address, Vec<u8>),
+  ProposalRef(Address, Vec<u8>),
+  CalldataRef(String, Vec<u8>),
+}
+
+impl ExpandedParam {
+  pub fn data(&self) -> &[u8] {
+    match self {
+      Self::Inline(v) => v,
+      Self::AccountRef(_, v) => v,
+      Self::ProposalRef(_, v) => v,
+      Self::CalldataRef(_, v) => v,
+    }
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Code {
   Inline(Vec<u8>),
   AccountRef(Address, String), // (address, entrypoint)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Predicate {
-  pub code: Code,
-  pub params: Vec<Param>,
+pub struct ExpandedCode {
+  pub code: Vec<u8>,
+  pub entrypoint: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum PredicateTree {
-  Id(Predicate),
-  Not(Box<PredicateTree>),
-  And(Box<PredicateTree>, Box<PredicateTree>),
-  Or(Box<PredicateTree>, Box<PredicateTree>),
+pub struct Predicate<R: Repr = Exact> {
+  pub code: R::Code,
+  pub params: Vec<R::Param>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PredicateTree<R: Repr = Exact> {
+  Id(Predicate<R>),
+  Not(Box<PredicateTree<R>>),
+  And(Box<PredicateTree<R>>, Box<PredicateTree<R>>),
+  Or(Box<PredicateTree<R>>, Box<PredicateTree<R>>),
 }
 
 /// Specifies the reason a predicate is being invoked.

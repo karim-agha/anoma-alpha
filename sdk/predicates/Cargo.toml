@@ -15,8 +15,15 @@ anoma-predicates-sdk-macros = { path = "./derive" }
 rmp-serde = "1.1"
 wee_alloc = "0.4.5"
 serde = { version = "1.0", default-features = false }
+ed25519-dalek = { version = "1", features = [
+  "default",
+  "serde",
+  "u64_backend",
+] }
 
+[dev-dependencies]
+bs58 = "0.4"
 
-[[example]] 
+[[example]]
 name = "token"
 crate-type = ["cdylib"]

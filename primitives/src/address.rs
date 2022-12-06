@@ -121,6 +121,12 @@ impl Address {
     combined.push_str(segment.as_ref());
     Address::new(combined)
   }
+
+  pub fn is_parent_of(&self, other: &Self) -> bool {
+    let mut prefix = self.0.clone();
+    prefix.push('/');
+    other.0.starts_with(&prefix)
+  }
 }
 
 impl Display for Address {

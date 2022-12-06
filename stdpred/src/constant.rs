@@ -1,9 +1,9 @@
 use anoma_predicates_sdk::{
   predicate,
-  AccountChange,
   Address,
-  PopulatedParam,
-  Transaction,
+  ExpandedAccountChange,
+  ExpandedParam,
+  ExpandedTransaction,
   Trigger,
   TriggerRef,
 };
@@ -13,7 +13,11 @@ use anoma_predicates_sdk::{
 /// Parameters:
 ///   0: Boolean value that is always returned by this predicate
 #[predicate]
-fn constant(params: &[PopulatedParam], _: &Trigger, _: &Transaction) -> bool {
+fn constant(
+  params: &[ExpandedParam],
+  _: &Trigger,
+  _: &ExpandedTransaction,
+) -> bool {
   assert_eq!(params.len(), 1);
   rmp_serde::from_slice(params.iter().next().expect("asserted").data())
     .expect("invalid argument format")
@@ -26,9 +30,9 @@ fn constant(params: &[PopulatedParam], _: &Trigger, _: &Transaction) -> bool {
 ///   0. Address of the immutable account
 #[predicate]
 fn immutable_state(
-  params: &[PopulatedParam],
+  params: &[ExpandedParam],
   trigger: &Trigger,
-  tx: &Transaction,
+  tx: &ExpandedTransaction,
 ) -> bool {
   assert_eq!(params.len(), 1);
   assert!(matches!(trigger, Trigger::Proposal(_))); // only valid on account predicates
@@ -40,7 +44,9 @@ fn immutable_state(
       .expect("invalid predicate param");
 
   if let Some(TriggerRef::Proposal(addr, change)) = tx.get(trigger) {
-    if target == *addr && matches!(change, AccountChange::ReplaceState(_)) {
+    if target == *addr
+      && matches!(change, ExpandedAccountChange::ReplaceState { .. })
+    {
       return false;
     }
   }
@@ -55,9 +61,9 @@ fn immutable_state(
 ///   0. Address of the immutable predicates account
 #[predicate]
 fn immutable_predicates(
-  params: &[PopulatedParam],
+  params: &[ExpandedParam],
   trigger: &Trigger,
-  tx: &Transaction,
+  tx: &ExpandedTransaction,
 ) -> bool {
   assert_eq!(params.len(), 1);
   assert!(matches!(trigger, Trigger::Proposal(_))); // only valid on account predicates
@@ -71,7 +77,8 @@ fn immutable_predicates(
   if let Some(TriggerRef::Proposal(addr, change)) = tx.get(trigger) {
     // allow changes only to children of this account but not the account itself
     // allow changes to the account state but not its predicates
-    if target == *addr && matches!(change, AccountChange::ReplacePredicates(_))
+    if target == *addr
+      && matches!(change, ExpandedAccountChange::ReplacePredicates { .. })
     {
       return false;
     }

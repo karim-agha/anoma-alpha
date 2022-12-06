@@ -1,5 +1,5 @@
 use {
-  crate::{b58::ToBase58String, PredicateTree},
+  crate::{b58::ToBase58String, Exact, PredicateTree, Repr},
   alloc::{collections::BTreeMap, string::String, vec::Vec},
   core::fmt::Debug,
   multihash::{Hasher, Multihash, MultihashDigest, Sha3_256},
@@ -10,13 +10,13 @@ use {
 /// Intents are partial transactions created by users describing what state
 /// transition they want to achieve.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct Intent {
+pub struct Intent<R: Repr = Exact> {
   /// Hash of a block within the last 2 epochs.
   /// Intents that have this value pointing to a
   /// block that is older then 2 epochs are expired
   /// and rejected by the chain.
   pub recent_blockhash: Multihash,
-  pub expectations: PredicateTree,
+  pub expectations: PredicateTree<R>,
 
   /// If any of the calldata entries is a signature,
   /// it should sign the recent_blockhash value.
@@ -26,10 +26,10 @@ pub struct Intent {
   hash_cache: OnceCell<Multihash>,
 }
 
-impl Intent {
+impl<R: Repr> Intent<R> {
   pub fn new(
     recent_blockhash: Multihash,
-    expectations: PredicateTree,
+    expectations: PredicateTree<R>,
     calldata: BTreeMap<String, Vec<u8>>,
   ) -> Self {
     Self {
@@ -41,7 +41,7 @@ impl Intent {
   }
 }
 
-impl Debug for Intent {
+impl<R: Repr> Debug for Intent<R> {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     f.debug_struct("Intent")
       .field("expectations", &self.expectations)
@@ -51,7 +51,7 @@ impl Debug for Intent {
   }
 }
 
-impl Intent {
+impl<R: Repr> Intent<R> {
   /// Hash of all elements except signatures.
   ///
   /// This value is used to compute signatures attached to an intent.
