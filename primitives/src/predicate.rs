@@ -1,5 +1,5 @@
 use {
-  crate::{Address, Exact, Repr},
+  crate::{Address, Exact, ExpandedAccountChange, Repr},
   alloc::{boxed::Box, string::String, vec::Vec},
   core::fmt::Debug,
   multihash::Multihash,
@@ -18,7 +18,7 @@ pub enum Param {
 pub enum ExpandedParam {
   Inline(Vec<u8>),
   AccountRef(Address, Vec<u8>),
-  ProposalRef(Address, Vec<u8>),
+  ProposalRef(Address, ExpandedAccountChange),
   CalldataRef(String, Vec<u8>),
 }
 
@@ -27,7 +27,12 @@ impl ExpandedParam {
     match self {
       Self::Inline(v) => v,
       Self::AccountRef(_, v) => v,
-      Self::ProposalRef(_, v) => v,
+      Self::ProposalRef(_, ac) => match ac {
+        ExpandedAccountChange::CreateAccount(acc) => &acc.state,
+        ExpandedAccountChange::ReplaceState { proposed, .. } => proposed,
+        ExpandedAccountChange::ReplacePredicates { .. } => &[],
+        ExpandedAccountChange::DeleteAccount { .. } => &[],
+      },
       Self::CalldataRef(_, v) => v,
     }
   }
@@ -35,6 +40,8 @@ impl ExpandedParam {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Code {
+  /// If the predicate code is inlined then it must export a predicate
+  /// named "predicate" and it will be the entrypoint.
   Inline(Vec<u8>),
   AccountRef(Address, String), // (address, entrypoint)
 }
@@ -62,9 +69,9 @@ pub enum PredicateTree<R: Repr = Exact> {
 impl<R: Repr> PredicateTree<R> {
   /// Applies a function to all predicates in the tree and returns a new
   /// tree with the same structure and modified predicates.
-  pub fn map<O: Repr, F>(&self, op: F) -> PredicateTree<O>
+  pub fn map<O: Repr, F>(self, op: F) -> PredicateTree<O>
   where
-    F: Fn(&Predicate<R>) -> Predicate<O> + Clone,
+    F: Fn(Predicate<R>) -> Predicate<O> + Clone,
   {
     match self {
       PredicateTree::Id(p) => PredicateTree::<O>::Id(op(p)),
@@ -77,6 +84,29 @@ impl<R: Repr> PredicateTree<R> {
         PredicateTree::<O>::Or(Box::new(l.map(op.clone())), Box::new(r.map(op)))
       }
     }
+  }
+
+  pub fn try_map<O: Repr, F, E>(self, op: F) -> Result<PredicateTree<O>, E>
+  where
+    F: Fn(Predicate<R>) -> Result<Predicate<O>, E> + Clone,
+  {
+    Ok(match self {
+      PredicateTree::Id(p) => PredicateTree::<O>::Id(match op(p) {
+        Ok(res) => res,
+        Err(e) => return Err(e),
+      }),
+      PredicateTree::Not(pt) => {
+        PredicateTree::<O>::Not(Box::new(pt.try_map(op)?))
+      }
+      PredicateTree::And(l, r) => PredicateTree::<O>::And(
+        Box::new(l.try_map(op.clone())?),
+        Box::new(r.try_map(op)?),
+      ),
+      PredicateTree::Or(l, r) => PredicateTree::<O>::Or(
+        Box::new(l.try_map(op.clone())?),
+        Box::new(r.try_map(op)?),
+      ),
+    })
   }
 }
 
@@ -126,6 +156,7 @@ mod tests {
             params: vec![
               Param::AccountRef("/address/two".parse().unwrap()),
               Param::AccountRef("/address/three".parse().unwrap()),
+              Param::ProposalRef("/address/five".parse().unwrap()),
             ],
           })),
         )),
@@ -169,6 +200,13 @@ mod tests {
               ExpandedParam::AccountRef(
                 "/address/three".parse().unwrap(),
                 b"/ADDRESS/THREE".to_vec(),
+              ),
+              ExpandedParam::ProposalRef(
+                "/address/five".parse().unwrap(),
+                crate::ExpandedAccountChange::ReplaceState {
+                  current: vec![],
+                  proposed: b"/ADDRESS/FIVE".to_vec(),
+                },
               ),
             ],
           })),
@@ -222,7 +260,10 @@ mod tests {
           ),
           Param::ProposalRef(p) => ExpandedParam::ProposalRef(
             p.clone(),
-            p.to_string().to_uppercase().as_bytes().to_vec(),
+            crate::ExpandedAccountChange::ReplaceState {
+              current: vec![],
+              proposed: p.to_string().to_uppercase().as_bytes().to_vec(),
+            },
           ),
           Param::CalldataRef(c) => ExpandedParam::CalldataRef(
             c.clone(),

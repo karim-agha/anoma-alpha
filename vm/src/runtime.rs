@@ -7,7 +7,7 @@ use {
 #[derive(Debug, Error)]
 pub enum Error {}
 
-pub fn execute(
+pub fn invoke(
   _predicate: Predicate<Expanded>,
   _trigger: Trigger,
   _tx: Transaction<Expanded>,
@@ -106,7 +106,7 @@ mod tests {
             // input params as per documentation:
 
             // self address, used to identity child wallet balances accounts
-            Param::Inline(to_vec(&&tokenaddr).unwrap()),
+            Param::Inline(to_vec(&tokenaddr).unwrap()),
             // mint authority, signature to authorize minting and burning
             // tokens
             Param::Inline(to_vec(&mint_authority).unwrap()),

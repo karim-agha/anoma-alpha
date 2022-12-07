@@ -1,8 +1,10 @@
+mod limits;
+mod package;
 mod runtime;
 mod state;
-mod limits;
 
 pub use {
-  runtime::{execute, Error as RuntimeError},
+  package::package_transaction,
+  runtime::Error as RuntimeError,
   state::{InMemoryStateStore, State, StateDiff},
 };
