@@ -14,7 +14,7 @@ use {
   serde::{Deserialize, Serialize},
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub enum AccountChange {
   CreateAccount(Account),
   ReplaceState(Vec<u8>),
@@ -22,7 +22,7 @@ pub enum AccountChange {
   DeleteAccount,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub enum ExpandedAccountChange {
   CreateAccount(Account),
   ReplaceState {

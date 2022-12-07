@@ -52,17 +52,26 @@ impl<R: Repr> Debug for Intent<R> {
 }
 
 impl<R: Repr> Intent<R> {
-  /// Hash of all elements except signatures.
-  ///
-  /// This value is used to compute signatures attached to an intent.
-  /// This value is computed only once on first call and then cached
-  /// for subsequent invocations.
+  /// Hash of the intent that uniquely identitifies it.
   pub fn hash(&self) -> &Multihash {
     self.hash_cache.get_or_init(|| {
       let mut hasher = Sha3_256::default();
       hasher.update(&rmp_serde::to_vec(&self.recent_blockhash).unwrap());
       hasher.update(&rmp_serde::to_vec(&self.expectations).unwrap());
       hasher.update(&rmp_serde::to_vec(&self.calldata).unwrap());
+      multihash::Code::Sha3_256.wrap(hasher.finalize()).unwrap()
+    })
+  }
+
+  /// Hash of the contents of the intent without calldata.
+  /// 
+  /// This hash is used as the message when signatures need 
+  /// to be attached to intents.
+  pub fn signing_hash(&self) -> &Multihash {
+    self.hash_cache.get_or_init(|| {
+      let mut hasher = Sha3_256::default();
+      hasher.update(&rmp_serde::to_vec(&self.recent_blockhash).unwrap());
+      hasher.update(&rmp_serde::to_vec(&self.expectations).unwrap());
       multihash::Code::Sha3_256.wrap(hasher.finalize()).unwrap()
     })
   }

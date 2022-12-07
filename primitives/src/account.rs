@@ -1,5 +1,5 @@
 use {
-  crate::{PredicateTree},
+  crate::PredicateTree,
   alloc::vec::Vec,
   serde::{Deserialize, Serialize},
 };
@@ -16,7 +16,7 @@ use {
 /// wallet balance account defined at "/token/usda/walletaddress1", then any
 /// modification to the latter will trigger validity predicates stored at
 /// addresses.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct Account {
   /// Arbitary data stored within an account, this could be some token
   /// balance for a user wallet, wasm bytecode that acts as a predicate,

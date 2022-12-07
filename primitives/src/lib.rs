@@ -14,13 +14,27 @@ use {
   serde::{Deserialize, Serialize},
 };
 
-pub trait Repr: Debug + Clone + Serialize {
-  type Param: Debug + Clone + Serialize + for<'de> Deserialize<'de>;
-  type Code: Debug + Clone + Serialize + for<'de> Deserialize<'de>;
-  type AccountChange: Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+pub trait Repr: Debug + Clone + Serialize + Eq + PartialEq {
+  type Param: Debug
+    + Clone
+    + PartialEq
+    + Eq
+    + Serialize
+    + for<'de> Deserialize<'de>;
+  type Code: Debug
+    + Clone
+    + PartialEq
+    + Eq
+    + Serialize
+    + for<'de> Deserialize<'de>;
+  type AccountChange: Debug
+    + Clone
+    + PartialEq
+    + Serialize
+    + for<'de> Deserialize<'de>;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Expanded;
 impl Repr for Expanded {
   type AccountChange = ExpandedAccountChange;
@@ -28,7 +42,7 @@ impl Repr for Expanded {
   type Param = ExpandedParam;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Exact;
 impl Repr for Exact {
   type AccountChange = AccountChange;
