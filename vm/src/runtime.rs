@@ -7,7 +7,10 @@ use {
 #[derive(Debug, Error)]
 pub enum Error {}
 
-pub fn execute(_transaction: Transaction, _state: &impl State) -> Result<StateDiff, Error> {
+pub fn execute(
+  _transaction: Transaction,
+  _state: &impl State,
+) -> Result<StateDiff, Error> {
   todo!()
 }
 

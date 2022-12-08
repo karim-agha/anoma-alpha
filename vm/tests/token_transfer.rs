@@ -13,9 +13,8 @@ use {
   },
   anoma_vm::{InMemoryStateStore, State, StateDiff},
   ed25519_dalek::{Keypair, PublicKey, Signer},
-  multihash::{Multihash, MultihashDigest},
+  multihash::MultihashDigest,
   rmp_serde::to_vec,
-  std::collections::BTreeMap,
 };
 
 fn install_standard_library() -> StateDiff {

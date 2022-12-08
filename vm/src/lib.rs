@@ -5,7 +5,6 @@ mod state;
 
 pub use {
   package::package_transaction,
-  runtime::Error as RuntimeError,
-  runtime::execute,
+  runtime::{execute, Error as RuntimeError},
   state::{InMemoryStateStore, State, StateDiff},
 };
