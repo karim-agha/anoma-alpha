@@ -91,18 +91,13 @@ use {
     Trigger,
   },
   ed25519_dalek::{PublicKey, Signature, Verifier},
-  serde::{Deserialize, Serialize},
 };
 
-#[derive(Debug, Serialize, Deserialize)]
-enum TokenState {
-  V1 { total_supply: u64 },
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-enum WalletBalanceState {
-  V1 { amount: u64 },
-}
+// those can be structs as the contract grows
+// and more features are implemented or if
+// we want versioning of state/contract.
+type TokenSupply = u64;
+type WalletBalance = u64;
 
 #[predicate]
 fn predicate(
@@ -203,12 +198,8 @@ fn predicate(
 }
 
 fn sum_balances(token_addr: &Address, tx: &ExpandedTransaction) -> (u64, u64) {
-  let balance = |state| -> u64 {
-    let state: WalletBalanceState = rmp_serde::from_slice(state)
-      .expect("invalid token balance account state");
-    match state {
-      WalletBalanceState::V1 { amount } => amount,
-    }
+  let balance = |state| -> WalletBalance {
+    rmp_serde::from_slice(state).expect("invalid token balance account state")
   };
 
   let pre_sum = tx
@@ -266,10 +257,6 @@ fn is_signed_by_mint_auth(
   false
 }
 
-fn read_total_supply(state: &[u8]) -> u64 {
-  let token_state: TokenState =
-    rmp_serde::from_slice(state).expect("invalid token account state format");
-  match token_state {
-    TokenState::V1 { total_supply } => total_supply,
-  }
+fn read_total_supply(state: &[u8]) -> TokenSupply {
+  rmp_serde::from_slice(state).expect("invalid token account state format")
 }

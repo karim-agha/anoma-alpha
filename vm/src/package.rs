@@ -36,7 +36,7 @@ pub enum ReferenceError {
   Calldata(String),
 }
 
-/// Packages all proposals for accounts mutation along with the existing
+/// Packages all proposals for account mutations along with the existing
 /// value of the mutated account. This is done so that predicates within
 /// a transaction could reason about the proposed account value and its current
 /// value without accessing any external state.
@@ -91,7 +91,7 @@ fn package_intents(
 ) -> Result<Vec<Intent<Expanded>>, ReferenceError> {
   let mut packaged_intents = Vec::with_capacity(intents.len());
   for intent in intents.into_iter() {
-    packaged_intents.push(Intent::<Expanded>::new(
+    packaged_intents.push(Intent::<Expanded>::with_calldata(
       intent.recent_blockhash,
       intent.expectations.try_map(|pred| {
         Ok(Predicate::<Expanded> {
@@ -163,4 +163,19 @@ pub fn package_transaction(
   let proposals = package_proposals(tx.proposals, state)?;
   let intents = package_intents(tx.intents, &proposals, state)?;
   Ok(Transaction::<Expanded> { intents, proposals })
+}
+
+
+#[cfg(test)]
+mod tests {
+
+  #[test]
+  fn package_smoke() {
+
+  }
+
+  #[test]
+  fn package_negative() {
+    
+  }
 }

@@ -86,6 +86,8 @@ impl Address {
       return Err(AddressError::EmptyPath);
     }
 
+    static ALLOWED_SYMBOLS: [char; 3] = ['.', '-', '_'];
+
     for c in chars {
       if c == '/' {
         if segment_len == 0 {
@@ -96,7 +98,10 @@ impl Address {
         segment_len += 1;
       }
 
-      if !(c.is_alphanumeric() || c == '/') {
+      if !(c.is_alphanumeric()
+        || c == '/'
+        || ALLOWED_SYMBOLS.iter().any(|s| *s == c))
+      {
         return Err(AddressError::InvalidCharacter(c));
       }
     }

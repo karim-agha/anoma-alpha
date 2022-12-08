@@ -30,6 +30,18 @@ impl<R: Repr> Intent<R> {
   pub fn new(
     recent_blockhash: Multihash,
     expectations: PredicateTree<R>,
+  ) -> Self {
+    Self {
+      recent_blockhash,
+      expectations,
+      calldata: BTreeMap::new(),
+      hash_cache: OnceCell::new(),
+    }
+  }
+
+  pub fn with_calldata(
+    recent_blockhash: Multihash,
+    expectations: PredicateTree<R>,
     calldata: BTreeMap<String, Vec<u8>>,
   ) -> Self {
     Self {
@@ -64,8 +76,8 @@ impl<R: Repr> Intent<R> {
   }
 
   /// Hash of the contents of the intent without calldata.
-  /// 
-  /// This hash is used as the message when signatures need 
+  ///
+  /// This hash is used as the message when signatures need
   /// to be attached to intents.
   pub fn signing_hash(&self) -> &Multihash {
     self.hash_cache.get_or_init(|| {

@@ -275,4 +275,9 @@ mod tests {
 
     assert_eq!(expected_output_tree, actual_output_tree);
   }
+
+  #[test]
+  fn predicate_tree_try_map() {
+    
+  }
 }

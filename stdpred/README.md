@@ -18,5 +18,8 @@ A set of general purpose predicates that are defined at genesis time. They cover
   - `uint_less_than_equal`
   - `uint_less_than_by`
 
+### Bytestrings
+  - `bytes_equal`
+
 #### Signature:
-  - `verify_ed25519_signature`
+  - `require_ed25519_signature`
