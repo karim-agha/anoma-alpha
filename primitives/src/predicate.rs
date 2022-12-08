@@ -108,6 +108,26 @@ impl<R: Repr> PredicateTree<R> {
       ),
     })
   }
+
+  /// Applies a function to all predicates in the tree and returns a new
+  /// tree with the same structure and modified predicates.
+  pub fn for_each<F>(&self, op: &mut F)
+  where
+    F: FnMut(&Predicate<R>),
+  {
+    match self {
+      PredicateTree::Id(p) => op(p),
+      PredicateTree::Not(pt) => pt.for_each(op),
+      PredicateTree::And(l, r) => {
+        l.for_each(op);
+        r.for_each(op);
+      }
+      PredicateTree::Or(l, r) => {
+        l.for_each(op);
+        r.for_each(op);
+      }
+    };
+  }
 }
 
 /// Specifies the reason a predicate is being invoked.
@@ -277,7 +297,5 @@ mod tests {
   }
 
   #[test]
-  fn predicate_tree_try_map() {
-    
-  }
+  fn predicate_tree_try_map() {}
 }
