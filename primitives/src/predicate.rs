@@ -41,7 +41,7 @@ impl ExpandedParam {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Code {
   /// If the predicate code is inlined then it must export a predicate
-  /// named "predicate" and it will be the entrypoint.
+  /// named "invoke" and it will be the entrypoint.
   Inline(Vec<u8>),
   AccountRef(Address, String), // (address, entrypoint)
 }

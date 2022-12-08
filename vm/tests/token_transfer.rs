@@ -121,7 +121,7 @@ fn mint_first_batch() -> anyhow::Result<()> {
     PredicateTree::<Exact>::And(
       Box::new(PredicateTree::Id(Predicate {
         // expect that the total supply is updated by the mint amount
-        code: Code::AccountRef("/predicate/std".parse()?, "uint_equal".into()),
+        code: Code::AccountRef("/predicates/std".parse()?, "uint_equal".into()),
         params: vec![
           Param::AccountRef("/token/usdx".parse()?),
           Param::Inline(to_vec(&1000u64)?),
@@ -129,9 +129,9 @@ fn mint_first_batch() -> anyhow::Result<()> {
       })),
       Box::new(PredicateTree::Id(Predicate {
         // expect that the minted amount is credited to a wallet
-        code: Code::AccountRef("/predicate/std".parse()?, "uint_equal".into()),
+        code: Code::AccountRef("/predicates/std".parse()?, "uint_equal".into()),
         params: vec![
-          Param::AccountRef("/token/usdx/wallet1.eth".parse()?),
+          Param::ProposalRef("/token/usdx/wallet1.eth".parse()?),
           Param::Inline(to_vec(&1000u64)?),
         ],
       })),
@@ -164,7 +164,7 @@ fn mint_first_batch() -> anyhow::Result<()> {
               // otherwise its happy to receive tokens
               // without any authorization.
               code: Code::AccountRef(
-                "/predicate/std".parse()?,
+                "/predicates/std".parse()?,
                 "uint_greater_than_equal".into(),
               ),
               params: vec![
@@ -176,7 +176,7 @@ fn mint_first_batch() -> anyhow::Result<()> {
               // If proposed balance is not greater that current balance
               // then require a signature to authorize spending
               code: Code::AccountRef(
-                "/predicate/std".parse()?,
+                "/predicates/std".parse()?,
                 "require_ed25519_signature".into(),
               ),
               params: vec![Param::Inline(
@@ -229,7 +229,7 @@ fn mint_first_batch() -> anyhow::Result<()> {
     PredicateTree::Or(
       Box::new(PredicateTree::Id(Predicate {
         code: Code::AccountRef(
-          "/predicate/std".parse()?,
+          "/predicates/std".parse()?,
           "uint_greater_than_equal".into(),
         ),
         params: vec![
@@ -239,7 +239,7 @@ fn mint_first_batch() -> anyhow::Result<()> {
       })),
       Box::new(PredicateTree::Id(Predicate {
         code: Code::AccountRef(
-          "/predicate/std".parse()?,
+          "/predicates/std".parse()?,
           "require_ed25519_signature".into(),
         ),
         params: vec![Param::Inline(wallet1keypair.public.to_bytes().to_vec(),)],
