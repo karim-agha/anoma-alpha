@@ -62,20 +62,15 @@ pub fn execute(
   // allowed.
   let intent_preds = collect::intents_predicates(state, &context, tx)?;
 
-  // run both sets of predicates in parallel
-  // and parallelize execution within each set
-  let (account_result, intents_result) = join(
-    || parallel_invoke_predicates(&context, &account_preds),
-    || parallel_invoke_predicates(&context, &intent_preds),
-  );
+  // merge both sets of predicates into one parallel iterator
+  let combined = account_preds
+    .into_par_iter() //
+    .chain(intent_preds.into_par_iter());
 
-  // both sides must evaluate successfully
-  // otherwise return the error that caused
-  // evaluation to fail.
-  match (account_result, intents_result) {
-    (Ok(()), Ok(())) => Ok(state_diff),
-    (Err(e), _) => Err(e),
-    (_, Err(e)) => Err(e),
+  // on success return the resulting state diff of this tx
+  match parallel_invoke_predicates(&context, combined) {
+    Ok(()) => Ok(state_diff),
+    Err(e) => Err(e),
   }
 }
 
@@ -87,7 +82,7 @@ pub fn execute(
 /// for the failure will be returned.
 fn parallel_invoke_predicates(
   context: &PredicateContext,
-  predicates: &[PredicateTree<Expanded>],
+  predicates: impl ParallelIterator<Item = PredicateTree<Expanded>>,
 ) -> Result<(), Error> {
   let cancelled = Arc::new(AtomicBool::new(false));
   predicates
