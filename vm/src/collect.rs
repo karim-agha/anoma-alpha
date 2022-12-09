@@ -20,7 +20,7 @@ use {
   thiserror::Error,
 };
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum Error {
   #[error("Trying to create an account ({0}) that already exists.")]
   AccountAlreadyExists(Address),
@@ -51,15 +51,6 @@ pub enum Error {
   )]
   CalldataNotFound(String, Predicate),
 }
-
-/// This represents predicates from all intents that need to
-/// evaluate to true before transaction proposals are allowed
-/// to mutate accounts.
-pub type IntentsPredicates = Vec<PredicateTree<Expanded>>;
-
-/// This represents predicates of mutated accounts and all their ancestors
-/// predicates groupped by mutated accounts addresses.
-pub type AccountsPrediates = HashMap<Address, PredicateTree<Expanded>>;
 
 /// in case all predicates evaluate successfully on mutated
 /// accounts and intents, then this is the set of state
@@ -139,12 +130,12 @@ pub fn predicate_context(
 
 /// Retreives a list of all account predicates that need to be invoked
 /// for each transaction proposal, along with account's ancestors predicates.
-pub fn account_predicates(
+pub fn accounts_predicates(
   state: &impl State,
   context: &PredicateContext,
   transaction: &Transaction,
-) -> Result<AccountsPrediates, Error> {
-  let mut output = AccountsPrediates::new();
+) -> Result<Vec<PredicateTree<Expanded>>, Error> {
+  let mut output = HashMap::new();
 
   // when predicates on accounts reference calldata entries,
   // the reference calldata entries stored in intents. If intents
@@ -192,15 +183,15 @@ pub fn account_predicates(
     }
   }
 
-  Ok(output)
+  Ok(output.into_iter().map(|(_, tree)| tree).collect())
 }
 
 pub fn intents_predicates(
   state: &impl State,
   context: &PredicateContext,
   tx: Transaction,
-) -> Result<IntentsPredicates, Error> {
-  let mut output = IntentsPredicates::with_capacity(tx.intents.len());
+) -> Result<Vec<PredicateTree<Expanded>>, Error> {
+  let mut output = Vec::with_capacity(tx.intents.len());
   for intent in tx.intents {
     output.push(expand_predicate_tree(
       state,
