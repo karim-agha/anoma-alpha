@@ -1,6 +1,6 @@
 use {
   crate::{collect, State, StateDiff},
-  anoma_primitives::{Expanded, Predicate, Transaction, Trigger},
+  anoma_primitives::{Expanded, Predicate, Transaction},
   thiserror::Error,
 };
 
@@ -11,29 +11,43 @@ pub enum Error {
 }
 
 pub fn execute(
-  transaction: Transaction,
+  tx: Transaction,
   state: &impl State,
 ) -> Result<StateDiff, Error> {
   // those changes will be applied if all predicates
   // evaluate to true in intents and mutated accounts.
   // the resulting type is a StateDiff that is ready
   // to be applied to global replicated blockchain
-  // state if all predicates evaluate to true.
-  let output = collect::outputs(state, &transaction)?;
+  // state.
+  let output = collect::outputs(state, &tx)?;
 
-  // collect all referenced state into a self-contained
-  // object that has everything it needs to execute all
-  // transactions. The resulting type is an expanded transaction.
-  let expanded = collect::references(state, transaction)?;
-  println!("output: {:?}", output);
-  println!("expanded: {:?}", expanded);
+  // This context object is passed to every account and intent predicate
+  // during evaluation stage. It contains all account mutations proposed
+  // by the transaction and all calldata attached to intents.
+  let context = collect::predicate_context(state, &tx)?;
+
+  // Those are predicates of accounts that are mutated by this
+  // transaction. They include immediate predicates of the mutated
+  // accounts and all their parent accounts. For each mutated account
+  // all its and its ancestor accounts predicates must evaluate to
+  // true before a mutation is accepted into the global blockchain state.
+  let account_preds = collect::account_predicates(state, &context, &tx)?;
+
+  // Those are predicates of all intents in the transaction. They all must
+  // evaluate to true for a transaction before any account mutations are
+  // allowed.
+  let intent_preds = collect::intents_predicates(state, &context, tx)?;
+
+  println!("output: {output:?}");
+  println!("account_preds: {account_preds:?}");
+  println!("intent_preds: {intent_preds:?}");
+  println!("context: {context:?}");
 
   todo!()
 }
 
 fn _invoke(
   _predicate: Predicate<Expanded>,
-  _trigger: Trigger,
   _tx: Transaction<Expanded>,
 ) -> Result<bool, Error> {
   todo!()

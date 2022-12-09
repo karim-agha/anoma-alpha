@@ -195,7 +195,7 @@ fn mint_first_batch() -> anyhow::Result<()> {
     .collect(),
   };
 
-  println!("tx: {tx:#?}");
+  println!("tx: {tx:?}");
 
   let outdiff = anoma_vm::execute(tx, &store)?;
 

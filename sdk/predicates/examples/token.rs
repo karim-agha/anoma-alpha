@@ -87,8 +87,7 @@ use {
     Address,
     ExpandedAccountChange,
     ExpandedParam,
-    ExpandedTransaction,
-    Trigger,
+    PredicateContext,
   },
   ed25519_dalek::{PublicKey, Signature, Verifier},
 };
@@ -100,16 +99,8 @@ type TokenSupply = u64;
 type WalletBalance = u64;
 
 #[predicate]
-fn predicate(
-  params: &[ExpandedParam],
-  trigger: &Trigger,
-  tx: &ExpandedTransaction,
-) -> bool {
+fn predicate(params: &[ExpandedParam], context: &PredicateContext) -> bool {
   assert_eq!(params.len(), 3);
-  assert!(
-    matches!(trigger, Trigger::Proposal(_)),
-    "this predicate is only valid on accounts and cannot be used in intents"
-  );
 
   let mut argit = params.iter();
 
@@ -129,7 +120,7 @@ fn predicate(
     _ => panic!("Expecting an AccountRef to the token address"),
   };
 
-  let (pre, post) = sum_balances(&self_addr, tx);
+  let (pre, post) = sum_balances(&self_addr, context);
 
   if pre == post {
     // total supply didn't change, so we don't need any signature from
@@ -142,11 +133,11 @@ fn predicate(
     // has an updated total supply that reflects the delta of pre & post
     // balances and that this change in the token supply value is authorized
     // by the mint authority.
-    if !is_signed_by_mint_auth(&mint_auth, tx) {
+    if !is_signed_by_mint_auth(&mint_auth, context) {
       return false;
     }
 
-    let total_supply_proposal = match tx.proposals.get(&self_addr) {
+    let total_supply_proposal = match context.proposals.get(&self_addr) {
       Some(v) => v,
       None => return false, // tx did not update the total supply, fail.
     };
@@ -197,12 +188,15 @@ fn predicate(
   }
 }
 
-fn sum_balances(token_addr: &Address, tx: &ExpandedTransaction) -> (u64, u64) {
+fn sum_balances(
+  token_addr: &Address,
+  context: &PredicateContext,
+) -> (u64, u64) {
   let balance = |state| -> WalletBalance {
     rmp_serde::from_slice(state).expect("invalid token balance account state")
   };
 
-  let pre_sum = tx
+  let pre_sum = context
     .proposals
     .iter()
     .filter(|(addr, _)| token_addr.is_parent_of(addr))
@@ -219,7 +213,7 @@ fn sum_balances(token_addr: &Address, tx: &ExpandedTransaction) -> (u64, u64) {
         })
     });
 
-  let post_sum = tx
+  let post_sum = context
     .proposals
     .iter()
     .filter(|(addr, _)| token_addr.is_parent_of(addr))
@@ -237,18 +231,16 @@ fn sum_balances(token_addr: &Address, tx: &ExpandedTransaction) -> (u64, u64) {
   (pre_sum, post_sum)
 }
 
+/// At least one of the intents has to be signed by the mint authority
 fn is_signed_by_mint_auth(
   mint_auth: &PublicKey,
-  tx: &ExpandedTransaction,
+  context: &PredicateContext,
 ) -> bool {
   let calldata_key = bs58::encode(mint_auth.as_bytes()).into_string();
-  for intent in &tx.intents {
-    if let Some(signature) = intent.calldata.get(&calldata_key) {
+  for (hash, calldata) in &context.calldata {
+    if let Some(signature) = calldata.get(&calldata_key) {
       if let Ok(signature) = Signature::from_bytes(signature) {
-        if mint_auth
-          .verify(&intent.hash().to_bytes(), &signature)
-          .is_ok()
-        {
+        if mint_auth.verify(&hash.to_bytes(), &signature).is_ok() {
           return true;
         }
       }

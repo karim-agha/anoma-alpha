@@ -7,6 +7,11 @@ use {
   serde::{Deserialize, Serialize},
 };
 
+/// Represents a list of arbitary key-value data attached
+/// to an intent. This can carry things like signatures,
+/// or any other arbitrary input parameters to intents, etc.
+pub type Calldata = BTreeMap<String, Vec<u8>>;
+
 /// Intents are partial transactions created by users describing what state
 /// transition they want to achieve.
 #[derive(Clone, Serialize, Deserialize)]
@@ -20,7 +25,7 @@ pub struct Intent<R: Repr = Exact> {
 
   /// If any of the calldata entries is a signature,
   /// it should sign the recent_blockhash value.
-  pub calldata: BTreeMap<String, Vec<u8>>,
+  pub calldata: Calldata,
 
   #[serde(skip)]
   hash_cache: OnceCell<Multihash>,
@@ -34,7 +39,7 @@ impl<R: Repr> Intent<R> {
     Self {
       recent_blockhash,
       expectations,
-      calldata: BTreeMap::new(),
+      calldata: Calldata::new(),
       hash_cache: OnceCell::new(),
     }
   }
@@ -42,7 +47,7 @@ impl<R: Repr> Intent<R> {
   pub fn with_calldata(
     recent_blockhash: Multihash,
     expectations: PredicateTree<R>,
-    calldata: BTreeMap<String, Vec<u8>>,
+    calldata: Calldata,
   ) -> Self {
     Self {
       recent_blockhash,

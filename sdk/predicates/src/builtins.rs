@@ -1,12 +1,8 @@
-//#![cfg(target_family = "wasm")]
-
-use anoma_primitives::{ExpandedParam, Trigger};
-
 extern crate alloc;
 
 use {
   alloc::{boxed::Box, vec::Vec},
-  anoma_primitives::ExpandedTransaction,
+  anoma_primitives::{ExpandedParam, PredicateContext},
 };
 
 #[global_allocator]
@@ -20,25 +16,15 @@ pub extern "C" fn allocate(size: u32) -> *mut u8 {
   ptr
 }
 
-#[export_name = "__ingest_transaction"]
-pub extern "C" fn ingest_transaction(
+#[export_name = "__ingest_context"]
+pub extern "C" fn ingest_context(
   ptr: *mut u8,
   len: usize,
-) -> *const ExpandedTransaction {
+) -> *const PredicateContext {
   let bytes = unsafe { Vec::from_raw_parts(ptr, len, len) };
   let transaction = Box::new(rmp_serde::from_slice(&bytes).expect(
     "The virtual machine encoded an invalid transaction object. This is a bug \
      in Anoma not in your code.",
-  ));
-  Box::leak(transaction)
-}
-
-#[export_name = "__ingest_trigger"]
-pub extern "C" fn ingest_trigger(ptr: *mut u8, len: usize) -> *const Trigger {
-  let bytes = unsafe { Vec::from_raw_parts(ptr, len, len) };
-  let transaction = Box::new(rmp_serde::from_slice(&bytes).expect(
-    "The virtual machine encoded an invalid trigger object. This is a bug in \
-     Anoma not in your code.",
   ));
   Box::leak(transaction)
 }

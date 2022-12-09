@@ -1,12 +1,12 @@
 use {
-  crate::{Address, Exact, ExpandedAccountChange, Repr},
-  alloc::{boxed::Box, string::String, vec::Vec},
+  crate::{Address, Calldata, Exact, ExpandedAccountChange, Repr},
+  alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec},
   core::fmt::Debug,
   multihash::Multihash,
   serde::{Deserialize, Serialize},
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum Param {
   Inline(Vec<u8>),
   AccountRef(Address),
@@ -14,7 +14,7 @@ pub enum Param {
   CalldataRef(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ExpandedParam {
   Inline(Vec<u8>),
   AccountRef(Address, Vec<u8>),
@@ -38,7 +38,7 @@ impl ExpandedParam {
   }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum Code {
   /// If the predicate code is inlined then it must export a predicate
   /// named "invoke" and it will be the entrypoint.
@@ -46,19 +46,41 @@ pub enum Code {
   AccountRef(Address, String), // (address, entrypoint)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+impl core::fmt::Debug for Code {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    match self {
+      Self::Inline(_) => {
+        f.debug_tuple("Inline").field(&"[wasm-bytecode]").finish()
+      }
+      Self::AccountRef(arg0, arg1) => {
+        f.debug_tuple("AccountRef").field(arg0).field(arg1).finish()
+      }
+    }
+  }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ExpandedCode {
   pub code: Vec<u8>,
   pub entrypoint: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+impl core::fmt::Debug for ExpandedCode {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    f.debug_struct("ExpandedCode")
+      .field("code", &"[wasm-bytecode]")
+      .field("entrypoint", &self.entrypoint)
+      .finish()
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct Predicate<R: Repr = Exact> {
   pub code: R::Code,
   pub params: Vec<R::Param>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum PredicateTree<R: Repr = Exact> {
   Id(Predicate<R>),
   Not(Box<PredicateTree<R>>),
@@ -130,20 +152,18 @@ impl<R: Repr> PredicateTree<R> {
   }
 }
 
-/// Specifies the reason a predicate is being invoked.
-///
-/// Prediactes are invoked for two reasons:
-///
-/// 1. When they are part of an intent, that is included in a transaction, to
-/// check if intent expectations are satisfied.
-///
-/// 2. When an account is mutated, to check
-/// if the newly proposed account value satisfies the account requirements or
-/// any of its parents.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Trigger {
-  Intent(Multihash),
-  Proposal(Address),
+/// This context object is passed to predicates during evaluation stage.
+/// It contains all input key-value pairs attached to predicates and
+/// a list of all mutated accounts by a transaction.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PredicateContext {
+  /// Intent input key-value pair groupped by the intent hash.
+  /// Could include things like signature or other arbitrary
+  /// input parameters to predicates.
+  pub calldata: BTreeMap<Multihash, Calldata>,
+
+  /// Changes to accounts that are modified by a transaction.
+  pub proposals: BTreeMap<Address, ExpandedAccountChange>,
 }
 
 #[cfg(test)]
@@ -295,7 +315,4 @@ mod tests {
 
     assert_eq!(expected_output_tree, actual_output_tree);
   }
-
-  #[test]
-  fn predicate_tree_try_map() {}
 }

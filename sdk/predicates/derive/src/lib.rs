@@ -23,13 +23,7 @@ pub fn predicate(_: TokenStream, item: TokenStream) -> TokenStream {
 fn verify_signature(input_fn: &ItemFn) -> bool {
   // those exported functions are implemented by the SDK and are
   // used by the VM to deliver data to predicates before invoking them.
-  let reserved_names = [
-    "__allocate",
-    "__ingest_transaction",
-    "__ingest_params",
-    "__ingest_trigger",
-  ];
-
+  let reserved_names = ["__allocate", "__ingest_params", "__ingest_context"];
   let name: String = input_fn.sig.ident.to_string();
   if reserved_names.into_iter().any(|n| n == name) {
     panic!("Predicate is using a reserved name: {}", name);
@@ -38,17 +32,11 @@ fn verify_signature(input_fn: &ItemFn) -> bool {
   let mut argiter = input_fn.sig.inputs.iter();
   let first = argiter.next();
   let second = argiter.next();
-  let third = argiter.next();
   let ret = &input_fn.sig.output;
 
-  let args_ok = match (first, second, third, input_fn.sig.inputs.len()) {
-    (
-      Some(FnArg::Typed(first)),
-      Some(FnArg::Typed(second)),
-      Some(FnArg::Typed(third)),
-      3,
-    ) => {
-      let mut args = (false, false, false);
+  let args_ok = match (first, second, input_fn.sig.inputs.len()) {
+    (Some(FnArg::Typed(first)), Some(FnArg::Typed(second)), 2) => {
+      let mut args = (false, false);
       if let Type::Reference(ref reftype) = *first.ty {
         if reftype.mutability.is_none() {
           if let Type::Slice(ref slice) = *reftype.elem {
@@ -67,26 +55,14 @@ fn verify_signature(input_fn: &ItemFn) -> bool {
         if reftype.mutability.is_none() {
           if let Type::Path(ref path) = *reftype.elem {
             if let Some(elem) = path.path.segments.last() {
-              if elem.ident == "Trigger" {
+              if elem.ident == "PredicateContext" {
                 args.1 = true;
               }
             }
           }
         }
       }
-
-      if let Type::Reference(ref reftype) = *third.ty {
-        if reftype.mutability.is_none() {
-          if let Type::Path(ref path) = *reftype.elem {
-            if let Some(elem) = path.path.segments.last() {
-              if elem.ident == "ExpandedTransaction" {
-                args.2 = true;
-              }
-            }
-          }
-        }
-      }
-      args.0 && args.1 && args.2
+      args.0 && args.1
     }
     _ => false,
   };

@@ -4,17 +4,19 @@ use {
     Account,
     AccountChange,
     Address,
+    Calldata,
     Code,
     Expanded,
     ExpandedAccountChange,
     ExpandedCode,
     ExpandedParam,
-    Intent,
     Param,
     Predicate,
+    PredicateContext,
+    PredicateTree,
     Transaction,
   },
-  std::collections::BTreeMap,
+  std::collections::{BTreeMap, HashMap},
   thiserror::Error,
 };
 
@@ -50,10 +52,19 @@ pub enum Error {
   CalldataNotFound(String, Predicate),
 }
 
+/// This represents predicates from all intents that need to
+/// evaluate to true before transaction proposals are allowed
+/// to mutate accounts.
+pub type IntentsPredicates = Vec<PredicateTree<Expanded>>;
+
+/// This represents predicates of mutated accounts and all their ancestors
+/// predicates groupped by mutated accounts addresses.
+pub type AccountsPrediates = HashMap<Address, PredicateTree<Expanded>>;
+
 /// in case all predicates evaluate successfully on mutated
 /// accounts and intents, then this is the set of state
-/// mutations that will be applied to the replicated blockchain
-/// state.
+/// diff that will be applied to the replicated blockchain
+/// global state.
 pub fn outputs(
   state: &impl State,
   transaction: &Transaction,
@@ -101,98 +112,161 @@ pub fn outputs(
   Ok(output)
 }
 
-/// Given a transaction object that contains references to external
-/// accounts in the blockchain state, this function will produce an
-/// expanded version of the transaction that contains all the referenced
-/// accounts state.
-///
-/// The expanded transaction object can successfully execute all included
-/// preducates without further access to the global state, and can be safely
-/// executed concurrently with other transactions as long as read/write
-/// dependencies are preserved.
-pub fn references(
+/// Prepares the transaction context that is passed as an
+/// argument to every predicate triggered by a transaction.
+pub fn predicate_context(
   state: &impl State,
-  transaction: Transaction,
-) -> Result<Transaction<Expanded>, Error> {
-  let mut proposals = BTreeMap::new();
-  let mut intents = Vec::with_capacity(transaction.intents.len());
-
-  for (addr, change) in transaction.proposals {
-    proposals.insert(
-      addr.clone(), //
-      expand_account_change(addr, state, &change)?,
-    );
-  }
-
-  for intent in transaction.intents {
-    intents.push(expand_intent(intent, &proposals, state)?);
-  }
-
-  Ok(Transaction::<Expanded> { intents, proposals })
+  transaction: &Transaction,
+) -> Result<PredicateContext, Error> {
+  Ok(PredicateContext {
+    calldata: transaction
+      .intents
+      .iter()
+      .map(|intent| (*intent.hash(), intent.calldata.clone()))
+      .collect(),
+    proposals: {
+      let mut proposals = BTreeMap::new();
+      for (addr, change) in &transaction.proposals {
+        proposals.insert(
+          addr.clone(), //
+          expand_account_change(addr.clone(), state, change)?,
+        );
+      }
+      proposals
+    },
+  })
 }
 
-/// Intents reference various accounts, calldata, proposals, etc.
-/// This function takes an intent object and turns it in to an
-/// expanded intent with all references resolved and fetched, so it
-/// can evaluate its conditions without firther access to global state.
-fn expand_intent(
-  intent: Intent,
-  proposals: &BTreeMap<Address, ExpandedAccountChange>,
+/// Retreives a list of all account predicates that need to be invoked
+/// for each transaction proposal, along with account's ancestors predicates.
+pub fn account_predicates(
   state: &impl State,
-) -> Result<Intent<Expanded>, Error> {
-  Ok(Intent::<Expanded>::with_calldata(
-    intent.recent_blockhash,
-    intent.expectations.try_map(|pred| {
-      let pred_e = pred.clone();
-      Ok(Predicate::<Expanded> {
-        code: match pred.code {
-          Code::Inline(wasm) => ExpandedCode {
-            code: wasm,
-            entrypoint: "invoke".into(),
-          },
-          Code::AccountRef(addr, entrypoint) => {
-            if let Some(acc) = state.get(&addr) {
-              ExpandedCode {
-                code: acc.state,
-                entrypoint,
-              }
-            } else {
-              return Err(Error::CodeDoesNotExist(addr, pred_e));
+  context: &PredicateContext,
+  transaction: &Transaction,
+) -> Result<AccountsPrediates, Error> {
+  let mut output = AccountsPrediates::new();
+
+  // when predicates on accounts reference calldata entries,
+  // the reference calldata entries stored in intents. If intents
+  // have overlapping calldata entries, then one of them will be
+  // bound to the CalldataRef parameter. The one that gets bound is
+  // undetermined as we don't want to make any promises for VM users.
+  //
+  // Its rare that account predicates reference calldata entries from
+  // predicates, but when they do, its most likely a very specific value
+  // identified by things like a public key.
+  //
+  // If account predicates care about which specific intent has a given
+  // calldata entry, then they have access to the context object that groups
+  // those entries by the containing intent hash.
+  let calldata = context
+    .calldata
+    .values()
+    .cloned()
+    .reduce(|mut prev, current| {
+      prev.extend(current);
+      prev
+    })
+    .unwrap_or_default();
+
+  for addr in transaction.proposals.keys() {
+    if !output.contains_key(addr) {
+      if let Some(acc) = state.get(addr) {
+        output.insert(
+          addr.clone(),
+          expand_predicate_tree(state, acc.predicates, context, &calldata)?,
+        );
+      }
+    }
+
+    // and predicates of all its ancestors (if any)
+    for addr in addr.ancestors() {
+      if !output.contains_key(&addr) {
+        if let Some(acc) = state.get(&addr) {
+          output.insert(
+            addr.clone(),
+            expand_predicate_tree(state, acc.predicates, context, &calldata)?,
+          );
+        }
+      }
+    }
+  }
+
+  Ok(output)
+}
+
+pub fn intents_predicates(
+  state: &impl State,
+  context: &PredicateContext,
+  tx: Transaction,
+) -> Result<IntentsPredicates, Error> {
+  let mut output = IntentsPredicates::with_capacity(tx.intents.len());
+  for intent in tx.intents {
+    output.push(expand_predicate_tree(
+      state,
+      intent.expectations,
+      context,
+      &intent.calldata,
+    )?);
+  }
+  Ok(output)
+}
+
+/// Gathers a predicate tree into a self contained object with
+/// all external references to accounts, proposals or calldata
+/// resolved and embedded in the expanded representation of
+/// predicate tree.
+fn expand_predicate_tree(
+  state: &impl State,
+  tree: PredicateTree,
+  context: &PredicateContext,
+  calldata: &Calldata,
+) -> Result<PredicateTree<Expanded>, Error> {
+  tree.try_map(|pred| {
+    let pred_e = pred.clone();
+    Ok(Predicate::<Expanded> {
+      code: match pred.code {
+        Code::Inline(wasm) => ExpandedCode {
+          code: wasm,
+          entrypoint: "invoke".into(),
+        },
+        Code::AccountRef(addr, entrypoint) => {
+          if let Some(acc) = state.get(&addr) {
+            ExpandedCode {
+              code: acc.state,
+              entrypoint,
             }
+          } else {
+            return Err(Error::CodeDoesNotExist(addr, pred_e));
           }
-        },
-        params: {
-          let mut params = Vec::with_capacity(pred.params.len());
-          for param in pred.params {
-            params.push(match param {
-              Param::Inline(v) => ExpandedParam::Inline(v),
-              Param::AccountRef(addr) => match state.get(&addr) {
-                Some(acc) => ExpandedParam::AccountRef(addr, acc.state),
-                None => {
-                  return Err(Error::AccountRefDoesNotExist(addr, pred_e))
-                }
+        }
+      },
+      params: {
+        let mut params = Vec::with_capacity(pred.params.len());
+        for param in pred.params {
+          params.push(match param {
+            Param::Inline(v) => ExpandedParam::Inline(v),
+            Param::AccountRef(addr) => match state.get(&addr) {
+              Some(acc) => ExpandedParam::AccountRef(addr, acc.state),
+              None => return Err(Error::AccountRefDoesNotExist(addr, pred_e)),
+            },
+            Param::ProposalRef(addr) => ExpandedParam::ProposalRef(
+              addr.clone(),
+              match context.proposals.get(&addr) {
+                Some(change) => change.clone(),
+                None => return Err(Error::ProposalDoesNotExist(addr, pred_e)),
               },
-              Param::ProposalRef(addr) => ExpandedParam::ProposalRef(
-                addr.clone(),
-                match proposals.get(&addr) {
-                  Some(change) => change.clone(),
-                  None => {
-                    return Err(Error::ProposalDoesNotExist(addr, pred_e))
-                  }
-                },
-              ),
-              Param::CalldataRef(key) => match intent.calldata.get(&key) {
-                Some(val) => ExpandedParam::CalldataRef(key, val.clone()),
-                None => return Err(Error::CalldataNotFound(key, pred_e)),
-              },
-            });
-          }
-          params
-        },
-      })
-    })?,
-    intent.calldata,
-  ))
+            ),
+            Param::CalldataRef(key) => match calldata.get(&key) {
+              Some(val) => ExpandedParam::CalldataRef(key, val.clone()),
+              None => return Err(Error::CalldataNotFound(key, pred_e)),
+            },
+          });
+        }
+        params
+      },
+    })
+  })
 }
 
 /// For account mutation proposals, this will produce an expanded
