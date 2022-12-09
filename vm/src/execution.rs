@@ -135,7 +135,7 @@ fn parallel_invoke_predicates(
       (Err(e1), Err(_)) => Err(e1),              /* randomy pick one of the
                                                    * two failures :-) */
     })
-    // this case happens when writing to an account
+    // this case happens when creating a new account
     // that has no predicates attached to any of its
     // parents, then there are no account predicates
     // gating this write.
