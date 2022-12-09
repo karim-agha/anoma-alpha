@@ -126,14 +126,14 @@ fn parallel_invoke_predicates(
 
       output
     })
-    .reduce_with(|prev, current| match (prev, current) {
+    .reduce_with(|a, b| match (a, b) {
       (Ok(_), Ok(_)) => Ok(()),
       (Err(e), Ok(_)) => Err(e),
       (Ok(_), Err(e)) => Err(e),
       (Err(Error::Cancelled), Err(e)) => Err(e), // skip cancelled
       (Err(e), Err(Error::Cancelled)) => Err(e), // skip cancelled
-      (Err(e1), Err(_)) => Err(e1),              /* randomy pick one of the
-                                                   * two failures :-) */
+      (Err(e1), Err(_)) => Err(e1),              // randomy pick one :-)
+                                                   
     })
     // this case happens when creating a new account
     // that has no predicates attached to any of its

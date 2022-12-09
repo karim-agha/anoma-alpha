@@ -183,7 +183,7 @@ pub fn accounts_predicates(
     }
   }
 
-  Ok(output.into_iter().map(|(_, tree)| tree).collect())
+  Ok(output.into_values().collect())
 }
 
 pub fn intents_predicates(
