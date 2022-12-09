@@ -62,11 +62,6 @@ pub fn execute(
   // allowed.
   let intent_preds = collect::intents_predicates(state, &context, tx)?;
 
-  println!("output: {state_diff:?}");
-  println!("account_preds: {account_preds:?}");
-  println!("intent_preds: {intent_preds:?}");
-  println!("context: {context:?}");
-
   // run both sets of predicates in parallel
   // and parallelize execution within each set
   let (account_result, intents_result) = join(
@@ -104,25 +99,27 @@ fn parallel_invoke_predicates(
 
       let mut output = Ok(());
       tree.for_each(&mut |pred| {
-        if !cancelled.load(Ordering::Acquire) {
-          let result = match invoke(pred, context) {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(Error::Rejected(pred.clone())),
-            Err(e) => Err(e),
-          };
+        if cancelled.load(Ordering::Acquire) {
+          return;
+        }
 
-          if let Err(e) = result {
-            // on first error cancel evaluating all
-            // remaining predicates in the predicates set,
-            // and store the reason why evaluation failed
-            if let Ok(true) = cancelled.compare_exchange(
-              false,
-              true,
-              Ordering::Release,
-              Ordering::Acquire,
-            ) {
-              output = Err(e);
-            }
+        let result = match invoke(pred, context) {
+          Ok(true) => Ok(()),
+          Ok(false) => Err(Error::Rejected(pred.clone())),
+          Err(e) => Err(e),
+        };
+
+        if let Err(e) = result {
+          // on first error cancel evaluating all
+          // remaining predicates in the predicates set,
+          // and store the reason why evaluation failed
+          if let Ok(true) = cancelled.compare_exchange(
+            false,
+            true,
+            Ordering::Release,
+            Ordering::Acquire,
+          ) {
+            output = Err(e);
           }
         }
       });
