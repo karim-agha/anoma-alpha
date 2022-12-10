@@ -150,18 +150,7 @@ fn parallel_invoke_predicates(
         }
       }).reduce(|p| p, not, and, or).map(|_| ())
     })
-    .reduce_with(|a, b| match (a, b) { // && all top-levl predicates
-      (Ok(_), Ok(_)) => Ok(()),
-      (Err(e), Ok(_)) => Err(e),
-      (Ok(_), Err(e)) => Err(e),
-      (Err(Error::Cancelled), Err(e)) => Err(e), // skip cancelled
-      (Err(e), Err(Error::Cancelled)) => Err(e), // skip cancelled
-      (Err(e1), Err(_)) => Err(e1),              // randomy pick one :-)
-    })
-    // this case happens when creating a new account
-    // that has no predicates attached to any of its
-    // ancestors, then there are no account predicates
-    // gating this write.
+    .reduce_with(and) // top-level preds
     .unwrap_or(Ok(()))
 }
 
@@ -243,15 +232,18 @@ fn not(
       p.code.entrypoint = not;
       Err(Error::Rejected(p))
     }
-    Err(Error::Rejected(p)) => Ok(p),
+    Err(Error::Rejected(mut p)) => {
+      let mut not: String = "not(".into();
+      not.push_str(&p.code.entrypoint);
+      not.push(')');
+      p.code.entrypoint = not;
+      Ok(p)
+    }
     Err(e) => Err(e),
   }
 }
 
-fn and(
-  a: Result<Predicate<Expanded>, Error>,
-  b: Result<Predicate<Expanded>, Error>,
-) -> Result<Predicate<Expanded>, Error> {
+fn and<T>(a: Result<T, Error>, b: Result<T, Error>) -> Result<T, Error> {
   match (a, b) {
     (Ok(p), Ok(_)) => Ok(p),
     (Ok(_), Err(Error::Rejected(p))) => Err(Error::Rejected(p)),
@@ -263,10 +255,7 @@ fn and(
   }
 }
 
-fn or(
-  a: Result<Predicate<Expanded>, Error>,
-  b: Result<Predicate<Expanded>, Error>,
-) -> Result<Predicate<Expanded>, Error> {
+fn or<T>(a: Result<T, Error>, b: Result<T, Error>) -> Result<T, Error> {
   match (a, b) {
     (Ok(p), Ok(_)) => Ok(p),
     (Ok(p), Err(Error::Rejected(_))) => Ok(p),
