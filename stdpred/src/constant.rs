@@ -1,9 +1,12 @@
-use anoma_predicates_sdk::{
-  predicate,
-  Address,
-  ExpandedAccountChange,
-  ExpandedParam,
-  PredicateContext,
+use {
+  alloc::vec::Vec,
+  anoma_predicates_sdk::{
+    predicate,
+    Address,
+    ExpandedAccountChange,
+    ExpandedParam,
+    PredicateContext,
+  },
 };
 
 /// Always return a const true or false.
@@ -11,7 +14,7 @@ use anoma_predicates_sdk::{
 /// Parameters:
 ///   0: Boolean value that is always returned by this predicate
 #[predicate]
-fn constant(params: &[ExpandedParam], _: &PredicateContext) -> bool {
+fn constant(params: &Vec<ExpandedParam>, _: &PredicateContext) -> bool {
   assert_eq!(params.len(), 1);
   rmp_serde::from_slice(params.iter().next().expect("asserted").data())
     .expect("invalid argument format")
@@ -24,7 +27,7 @@ fn constant(params: &[ExpandedParam], _: &PredicateContext) -> bool {
 ///   0. Address of the immutable account
 #[predicate]
 fn immutable_state(
-  params: &[ExpandedParam],
+  params: &Vec<ExpandedParam>,
   context: &PredicateContext,
 ) -> bool {
   assert_eq!(params.len(), 1);
@@ -51,7 +54,7 @@ fn immutable_state(
 ///   0. Address of the immutable predicates account
 #[predicate]
 fn immutable_predicates(
-  params: &[ExpandedParam],
+  params: &Vec<ExpandedParam>,
   context: &PredicateContext,
 ) -> bool {
   assert_eq!(params.len(), 1);

@@ -99,7 +99,7 @@ type TokenSupply = u64;
 type WalletBalance = u64;
 
 #[predicate]
-fn predicate(params: &[ExpandedParam], context: &PredicateContext) -> bool {
+fn predicate(params: &Vec<ExpandedParam>, context: &PredicateContext) -> bool {
   assert_eq!(params.len(), 3);
 
   let mut argit = params.iter();

@@ -1,7 +1,17 @@
 use {
   proc_macro::TokenStream,
   quote::quote,
-  syn::{parse_macro_input, parse_quote, Abi, FnArg, ItemFn, ReturnType, Type},
+  syn::{
+    parse_macro_input,
+    parse_quote,
+    Abi,
+    FnArg,
+    GenericArgument,
+    ItemFn,
+    PathArguments,
+    ReturnType,
+    Type,
+  },
 };
 
 #[proc_macro_attribute]
@@ -11,7 +21,7 @@ pub fn predicate(_: TokenStream, item: TokenStream) -> TokenStream {
   if !verify_signature(&input_fn) {
     panic!(
       "Expecting predicates to be a function with the following signature: \
-       fn(&[Param], &Trigger, &Transaction) -> bool"
+       fn(&Vec<ExpandedParam>, &PredicateContext) -> bool"
     );
   }
 
@@ -39,18 +49,27 @@ fn verify_signature(input_fn: &ItemFn) -> bool {
       let mut args = (false, false);
       if let Type::Reference(ref reftype) = *first.ty {
         if reftype.mutability.is_none() {
-          if let Type::Slice(ref slice) = *reftype.elem {
-            if let Type::Path(ref path) = *slice.elem {
-              if let Some(ident) = path.path.segments.last() {
-                if ident.ident == "ExpandedParam" {
-                  args.0 = true;
+          if let Type::Path(ref vecpath) = *reftype.elem {
+            if let Some(ident) = vecpath.path.segments.last() {
+              if ident.ident == "Vec" {
+                if let PathArguments::AngleBracketed(ref generics) =
+                  ident.arguments
+                {
+                  if let Some(GenericArgument::Type(Type::Path(ty))) =
+                    generics.args.iter().next()
+                  {
+                    if let Some(seg) = ty.path.segments.last() {
+                      if seg.ident == "ExpandedParam" {
+                        args.0 = true;
+                      }
+                    }
+                  }
                 }
               }
             }
           }
         }
       }
-
       if let Type::Reference(ref reftype) = *second.ty {
         if reftype.mutability.is_none() {
           if let Type::Path(ref path) = *reftype.elem {
@@ -87,9 +106,6 @@ fn verify_signature(input_fn: &ItemFn) -> bool {
 fn decorate_entrypoint_abi(input_fn: &mut ItemFn) {
   input_fn.attrs.push(parse_quote! {
     #[no_mangle]
-  });
-  input_fn.attrs.push(parse_quote! {
-    #[allow(improper_ctypes_definitions)]
   });
 
   input_fn.sig.abi = Some(Abi {

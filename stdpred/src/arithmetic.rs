@@ -1,9 +1,12 @@
-use anoma_predicates_sdk::{predicate, ExpandedParam, PredicateContext};
+use {
+  alloc::vec::Vec,
+  anoma_predicates_sdk::{predicate, ExpandedParam, PredicateContext},
+};
 
 /// Takes two arguments and varifies that they are equal 64bit unsigned
 /// integers.
 #[predicate]
-fn uint_equal(params: &[ExpandedParam], _: &PredicateContext) -> bool {
+fn uint_equal(params: &Vec<ExpandedParam>, _: &PredicateContext) -> bool {
   assert_eq!(params.len(), 2);
 
   let mut it = params.iter();
@@ -16,7 +19,10 @@ fn uint_equal(params: &[ExpandedParam], _: &PredicateContext) -> bool {
 /// Takes two 64bit unsigned int arguments and varifies that first
 /// is > than second.
 #[predicate]
-fn uint_greater_than(params: &[ExpandedParam], _: &PredicateContext) -> bool {
+fn uint_greater_than(
+  params: &Vec<ExpandedParam>,
+  _: &PredicateContext,
+) -> bool {
   assert_eq!(params.len(), 2);
 
   let mut it = params.iter();
@@ -30,7 +36,7 @@ fn uint_greater_than(params: &[ExpandedParam], _: &PredicateContext) -> bool {
 /// is >= than second.
 #[predicate]
 fn uint_greater_than_equal(
-  params: &[ExpandedParam],
+  params: &Vec<ExpandedParam>,
   _: &PredicateContext,
 ) -> bool {
   assert_eq!(params.len(), 2);
@@ -45,7 +51,7 @@ fn uint_greater_than_equal(
 /// Takes two 64bit unsigned arguments and varifies that first
 /// is < than second.
 #[predicate]
-fn uint_less_than(params: &[ExpandedParam], _: &PredicateContext) -> bool {
+fn uint_less_than(params: &Vec<ExpandedParam>, _: &PredicateContext) -> bool {
   assert_eq!(params.len(), 2);
 
   let mut it = params.iter();
@@ -59,7 +65,7 @@ fn uint_less_than(params: &[ExpandedParam], _: &PredicateContext) -> bool {
 /// is < than second.
 #[predicate]
 fn uint_less_than_equal(
-  params: &[ExpandedParam],
+  params: &Vec<ExpandedParam>,
   _: &PredicateContext,
 ) -> bool {
   assert_eq!(params.len(), 2);
@@ -75,7 +81,7 @@ fn uint_less_than_equal(
 /// arument at index 1 by a constant uint at argument index 2.
 #[predicate]
 fn uint_greater_than_by(
-  params: &[ExpandedParam],
+  params: &Vec<ExpandedParam>,
   _: &PredicateContext,
 ) -> bool {
   assert_eq!(params.len(), 3);
@@ -91,7 +97,10 @@ fn uint_greater_than_by(
 /// Takes three arguments and verifies that argument at index 0 is less than
 /// arument at index 1 by a constant uint at argument index 2.
 #[predicate]
-fn uint_less_than_by(params: &[ExpandedParam], _: &PredicateContext) -> bool {
+fn uint_less_than_by(
+  params: &Vec<ExpandedParam>,
+  _: &PredicateContext,
+) -> bool {
   assert_eq!(params.len(), 3);
 
   let mut it = params.iter();

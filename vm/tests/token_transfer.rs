@@ -72,7 +72,7 @@ fn create_usdx_token(mint_authority: PublicKey) -> StateDiff {
     predicates: PredicateTree::And(
       Box::new(PredicateTree::Id(Predicate {
         // token contract predicate
-        code: Code::AccountRef(tokenaddr.clone(), "predicate".into()),
+        code: Code::AccountRef("/token".parse().unwrap(), "predicate".into()),
         params: vec![
           // input params as per documentation:
 
@@ -123,7 +123,7 @@ fn mint_first_batch() -> anyhow::Result<()> {
         // expect that the total supply is updated by the mint amount
         code: Code::AccountRef("/predicates/std".parse()?, "uint_equal".into()),
         params: vec![
-          Param::AccountRef("/token/usdx".parse()?),
+          Param::ProposalRef("/token/usdx".parse()?),
           Param::Inline(to_vec(&1000u64)?),
         ],
       })),
@@ -195,8 +195,6 @@ fn mint_first_batch() -> anyhow::Result<()> {
     .collect(),
   };
 
-  println!("tx: {tx:?}");
-
   let outdiff = anoma_vm::execute(tx, &store)?;
 
   assert_eq!(outdiff.iter().count(), 2);
@@ -254,7 +252,7 @@ fn mint_first_batch() -> anyhow::Result<()> {
     outdiff.get(&"/token/usdx".parse()?).unwrap().predicates,
     PredicateTree::And(
       Box::new(PredicateTree::Id(Predicate {
-        code: Code::AccountRef(tokenaddr.clone(), "predicate".into()),
+        code: Code::AccountRef("/token".parse().unwrap(), "predicate".into()),
         params: vec![
           Param::Inline(to_vec(&tokenaddr).unwrap()),
           Param::Inline(to_vec(&mint_keypair.public).unwrap()),

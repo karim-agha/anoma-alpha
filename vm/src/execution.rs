@@ -65,7 +65,7 @@ pub enum Error {
   MemoryAccess(#[from] MemoryAccessError),
 
   #[error("WASM predicate returned an unexpected value: {0}")]
-  InvalidReturnValue(u8),
+  InvalidReturnValue(u32),
 }
 
 /// Executes a transaction
@@ -118,9 +118,8 @@ pub fn execute(
 /// Runs a set of predicates in parallel and returns Ok(()) if all of
 /// them successfully ran to completion and returned true.
 ///
-/// Otherwise if any predicate fails (returns false or crashes), then
-/// all other predicate will be cancelled and the reason
-/// for the failure will be returned.
+/// Otherwise if any predicate crashes, then all other predicate will
+/// be cancelled and the reason for the failure will be returned.
 fn parallel_invoke_predicates(
   context: &PredicateContext,
   predicates: impl ParallelIterator<Item = PredicateTree<Expanded>>,
@@ -135,36 +134,23 @@ fn parallel_invoke_predicates(
         return Err(Error::Cancelled);
       }
 
-      let mut output = Ok(());
-      tree.for_each(&mut |pred| {
+      tree.map(|pred| {
         if cancelled.load(Ordering::Acquire) {
-          return;
+          return Err(Error::Cancelled);
         }
 
-        let result = match invoke(&context, pred) {
-          Ok(true) => Ok(()),
-          Ok(false) => Err(Error::Rejected(pred.clone())),
-          Err(e) => Err(e),
-        };
-
-        if let Err(e) = result {
-          // on first error cancel evaluating all
-          // remaining predicates in the predicates set,
-          // and store the reason why evaluation failed
-          if let Ok(true) = cancelled.compare_exchange(
-            false,
-            true,
-            Ordering::Release,
-            Ordering::Acquire,
-          ) {
-            output = Err(e);
-          }
+        match invoke(&context, &pred) {
+          Ok(true) => Ok(pred),
+          Ok(false) => Err(Error::Rejected(pred)),
+          Err(e) => {
+            // on predicate crash, cancel everything
+            cancelled.store(true, Ordering::Release);
+            Err(e)
+          },
         }
-      });
-
-      output
+      }).reduce(|p| p, not, and, or).map(|_| ())
     })
-    .reduce_with(|a, b| match (a, b) {
+    .reduce_with(|a, b| match (a, b) { // && all top-levl predicates
       (Ok(_), Ok(_)) => Ok(()),
       (Err(e), Ok(_)) => Err(e),
       (Ok(_), Err(e)) => Err(e),
@@ -188,14 +174,14 @@ fn invoke(
     compiler,
     LimitingTunables::new(
       BaseTunables::for_target(&Target::default()),
-      Pages(1),
+      Pages(100),
     ),
   );
-  let module = Module::new(&store, &predicate.code.code)?;
-  let imports = imports! {};
-  let instance = Instance::new(&mut store, &module, &imports)?;
 
-  let inst_memory = instance.exports.get_memory("memory")?;
+  let imports = imports! {};
+  let module = Module::from_binary(&store, &predicate.code.code)?;
+  let instance = Instance::new(&mut store, &module, &imports)?;
+  let memory = instance.exports.get_memory("memory")?;
 
   let allocate_fn = instance
     .exports
@@ -217,7 +203,7 @@ fn invoke(
 
   let entrypoint_fn = instance
     .exports
-    .get_typed_function::<(WasmPtr<u8>, WasmPtr<u8>), u8>(
+    .get_typed_function::<(WasmPtr<u8>, WasmPtr<u8>), u32>(
       &store,
       &predicate.code.entrypoint,
     )?;
@@ -230,7 +216,7 @@ fn invoke(
       let raw_ptr = allocate_fn.call(&mut store, data_len)?;
       let ptr_offset = raw_ptr.offset() as u64;
       // copy data to wasm instance memory
-      inst_memory.view(&store).write(ptr_offset, data)?;
+      memory.view(&store).write(ptr_offset, data)?;
 
       // instantiate object in sdk-specific object model
       ingest_fn.call(&mut store, raw_ptr, data_len)
@@ -243,5 +229,51 @@ fn invoke(
     0 => Ok(false),
     1 => Ok(true),
     r => Err(Error::InvalidReturnValue(r)),
+  }
+}
+
+fn not(
+  val: Result<Predicate<Expanded>, Error>,
+) -> Result<Predicate<Expanded>, Error> {
+  match val {
+    Ok(mut p) => {
+      let mut not: String = "not(".into();
+      not.push_str(&p.code.entrypoint);
+      not.push(')');
+      p.code.entrypoint = not;
+      Err(Error::Rejected(p))
+    }
+    Err(Error::Rejected(p)) => Ok(p),
+    Err(e) => Err(e),
+  }
+}
+
+fn and(
+  a: Result<Predicate<Expanded>, Error>,
+  b: Result<Predicate<Expanded>, Error>,
+) -> Result<Predicate<Expanded>, Error> {
+  match (a, b) {
+    (Ok(p), Ok(_)) => Ok(p),
+    (Ok(_), Err(Error::Rejected(p))) => Err(Error::Rejected(p)),
+    (Err(Error::Rejected(p)), Ok(_)) => Err(Error::Rejected(p)),
+    (Err(Error::Cancelled), Err(e)) => Err(e),
+    (Err(e), Err(Error::Cancelled)) => Err(e),
+    (Err(e), _) => Err(e),
+    (_, Err(e)) => Err(e),
+  }
+}
+
+fn or(
+  a: Result<Predicate<Expanded>, Error>,
+  b: Result<Predicate<Expanded>, Error>,
+) -> Result<Predicate<Expanded>, Error> {
+  match (a, b) {
+    (Ok(p), Ok(_)) => Ok(p),
+    (Ok(p), Err(Error::Rejected(_))) => Ok(p),
+    (Err(Error::Rejected(_)), Ok(p)) => Ok(p),
+    (Err(Error::Cancelled), Err(e)) => Err(e),
+    (Err(e), Err(Error::Cancelled)) => Err(e),
+    (Err(e), _) => Err(e),
+    (_, Err(e)) => Err(e),
   }
 }

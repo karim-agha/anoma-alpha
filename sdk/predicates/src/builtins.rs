@@ -34,11 +34,11 @@ pub extern "C" fn ingest_context(
 pub extern "C" fn ingest_params(
   ptr: *mut u8,
   len: usize,
-) -> *const [ExpandedParam] {
+) -> *const Vec<ExpandedParam> {
   let bytes = unsafe { Vec::from_raw_parts(ptr, len, len) };
-  let params: Vec<ExpandedParam> = rmp_serde::from_slice(&bytes).expect(
+  let params = Box::new(rmp_serde::from_slice(&bytes).expect(
     "The virtual machine encoded an invalid params object. This is a bug in \
      Anoma not in your code.",
-  );
-  Box::leak(params.into_boxed_slice()) as *const _
+  ));
+  Box::leak(params)
 }

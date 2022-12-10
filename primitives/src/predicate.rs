@@ -49,8 +49,11 @@ pub enum Code {
 impl core::fmt::Debug for Code {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     match self {
-      Self::Inline(_) => {
-        f.debug_tuple("Inline").field(&"[wasm-bytecode]").finish()
+      Self::Inline(c) => {
+        let mut wasm_bytecode = String::from("[wasm-bytecode (");
+        wasm_bytecode.push_str(&c.len().to_string());
+        wasm_bytecode.push_str(") bytes]");
+        f.debug_tuple("Inline").field(&wasm_bytecode).finish()
       }
       Self::AccountRef(arg0, arg1) => {
         f.debug_tuple("AccountRef").field(arg0).field(arg1).finish()
@@ -67,8 +70,11 @@ pub struct ExpandedCode {
 
 impl core::fmt::Debug for ExpandedCode {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut wasm_bytecode = String::from("[wasm-bytecode (");
+    wasm_bytecode.push_str(&self.code.len().to_string());
+    wasm_bytecode.push_str(" bytes)]");
     f.debug_struct("ExpandedCode")
-      .field("code", &"[wasm-bytecode]")
+      .field("code", &wasm_bytecode)
       .field("entrypoint", &self.entrypoint)
       .finish()
   }
@@ -81,50 +87,50 @@ pub struct Predicate<R: Repr = Exact> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum PredicateTree<R: Repr = Exact> {
-  Id(Predicate<R>),
-  Not(Box<PredicateTree<R>>),
-  And(Box<PredicateTree<R>>, Box<PredicateTree<R>>),
-  Or(Box<PredicateTree<R>>, Box<PredicateTree<R>>),
+pub enum ExpressionTree<T> {
+  Id(T),
+  Not(Box<ExpressionTree<T>>),
+  And(Box<ExpressionTree<T>>, Box<ExpressionTree<T>>),
+  Or(Box<ExpressionTree<T>>, Box<ExpressionTree<T>>),
 }
 
-impl<R: Repr> PredicateTree<R> {
+pub type PredicateTree<T = Exact> = ExpressionTree<Predicate<T>>;
+
+impl<T> ExpressionTree<T> {
   /// Applies a function to all predicates in the tree and returns a new
   /// tree with the same structure and modified predicates.
-  pub fn map<O: Repr, F>(self, op: F) -> PredicateTree<O>
+  pub fn map<V, F>(self, op: F) -> ExpressionTree<V>
   where
-    F: Fn(Predicate<R>) -> Predicate<O> + Clone,
+    F: Fn(T) -> V + Clone,
   {
     match self {
-      PredicateTree::Id(p) => PredicateTree::<O>::Id(op(p)),
-      PredicateTree::Not(pt) => PredicateTree::<O>::Not(Box::new(pt.map(op))),
-      PredicateTree::And(l, r) => PredicateTree::<O>::And(
+      ExpressionTree::Id(p) => ExpressionTree::<V>::Id(op(p)),
+      ExpressionTree::Not(pt) => ExpressionTree::<V>::Not(Box::new(pt.map(op))),
+      ExpressionTree::And(l, r) => ExpressionTree::<V>::And(
         Box::new(l.map(op.clone())),
         Box::new(r.map(op)),
       ),
-      PredicateTree::Or(l, r) => {
-        PredicateTree::<O>::Or(Box::new(l.map(op.clone())), Box::new(r.map(op)))
-      }
+      ExpressionTree::Or(l, r) => ExpressionTree::<V>::Or(
+        Box::new(l.map(op.clone())),
+        Box::new(r.map(op)),
+      ),
     }
   }
 
-  pub fn try_map<O: Repr, F, E>(self, op: F) -> Result<PredicateTree<O>, E>
+  pub fn try_map<V, F, E>(self, op: F) -> Result<ExpressionTree<V>, E>
   where
-    F: Fn(Predicate<R>) -> Result<Predicate<O>, E> + Clone,
+    F: Fn(T) -> Result<V, E> + Clone,
   {
     Ok(match self {
-      PredicateTree::Id(p) => PredicateTree::<O>::Id(match op(p) {
-        Ok(res) => res,
-        Err(e) => return Err(e),
-      }),
-      PredicateTree::Not(pt) => {
-        PredicateTree::<O>::Not(Box::new(pt.try_map(op)?))
+      ExpressionTree::Id(p) => ExpressionTree::<V>::Id(op(p)?),
+      ExpressionTree::Not(pt) => {
+        ExpressionTree::<V>::Not(Box::new(pt.try_map(op)?))
       }
-      PredicateTree::And(l, r) => PredicateTree::<O>::And(
+      ExpressionTree::And(l, r) => ExpressionTree::<V>::And(
         Box::new(l.try_map(op.clone())?),
         Box::new(r.try_map(op)?),
       ),
-      PredicateTree::Or(l, r) => PredicateTree::<O>::Or(
+      ExpressionTree::Or(l, r) => ExpressionTree::<V>::Or(
         Box::new(l.try_map(op.clone())?),
         Box::new(r.try_map(op)?),
       ),
@@ -135,20 +141,47 @@ impl<R: Repr> PredicateTree<R> {
   /// tree with the same structure and modified predicates.
   pub fn for_each<F>(&self, op: &mut F)
   where
-    F: FnMut(&Predicate<R>),
+    F: FnMut(&T),
   {
     match self {
-      PredicateTree::Id(p) => op(p),
-      PredicateTree::Not(pt) => pt.for_each(op),
-      PredicateTree::And(l, r) => {
+      ExpressionTree::Id(p) => op(p),
+      ExpressionTree::Not(pt) => pt.for_each(op),
+      ExpressionTree::And(l, r) => {
         l.for_each(op);
         r.for_each(op);
       }
-      PredicateTree::Or(l, r) => {
+      ExpressionTree::Or(l, r) => {
         l.for_each(op);
         r.for_each(op);
       }
     };
+  }
+
+  pub fn reduce<IdFn, NotFn, AndFn, OrFn, R>(
+    self,
+    id: IdFn,
+    not: NotFn,
+    and: AndFn,
+    or: OrFn,
+  ) -> R
+  where
+    IdFn: Fn(T) -> R + Clone,
+    NotFn: Fn(R) -> R + Clone,
+    AndFn: Fn(R, R) -> R + Clone,
+    OrFn: Fn(R, R) -> R + Clone,
+  {
+    match self {
+      ExpressionTree::Id(v) => id(v),
+      ExpressionTree::Not(t) => not(t.reduce(id, not.clone(), and, or)),
+      ExpressionTree::And(t1, t2) => and(
+        t1.reduce(id.clone(), not.clone(), and.clone(), or.clone()),
+        t2.reduce(id, not, and.clone(), or),
+      ),
+      ExpressionTree::Or(t1, t2) => or(
+        t1.reduce(id.clone(), not.clone(), and.clone(), or.clone()),
+        t2.reduce(id, not, and, or.clone()),
+      ),
+    }
   }
 }
 
