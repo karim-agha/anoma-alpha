@@ -1,5 +1,7 @@
+#![allow(clippy::result_large_err)]
+
 use {
-  crate::{collect, State, StateDiff},
+  crate::{collect, limits::LimitingTunables, State, StateDiff},
   anoma_primitives::{
     Expanded,
     Predicate,
@@ -7,15 +9,33 @@ use {
     PredicateTree,
     Transaction,
   },
-  rayon::{join, prelude::*},
+  rayon::prelude::*,
+  rmp_serde::{encode, to_vec},
   std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
   },
   thiserror::Error,
+  wasmer::{
+    imports,
+    BaseTunables,
+    CompileError,
+    Cranelift,
+    ExportError,
+    Instance,
+    InstantiationError,
+    MemoryAccessError,
+    Module,
+    Pages,
+    RuntimeError,
+    Store,
+    Target,
+    TypedFunction,
+    WasmPtr,
+  },
 };
 
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Error)]
 pub enum Error {
   #[error("State access error: {0}")]
   State(#[from] collect::Error),
@@ -25,6 +45,27 @@ pub enum Error {
 
   #[error("Predicate evaluation cancelled by other failed predicates")]
   Cancelled,
+
+  #[error("WASM bytecode compilation error: {0}")]
+  Compile(#[from] CompileError),
+
+  #[error("WASM instantitation error: {0}")]
+  Instantiation(#[from] InstantiationError),
+
+  #[error("WASM export error: {0}")]
+  Export(#[from] ExportError),
+
+  #[error("Failed to serialize context for predicate: {0}")]
+  Encoding(#[from] encode::Error),
+
+  #[error("WASM execution error: {0}")]
+  Execution(#[from] RuntimeError),
+
+  #[error("WASM memory access error: {0}")]
+  MemoryAccess(#[from] MemoryAccessError),
+
+  #[error("WASM predicate returned an unexpected value: {0}")]
+  InvalidReturnValue(u8),
 }
 
 /// Executes a transaction
@@ -64,7 +105,7 @@ pub fn execute(
 
   // merge both sets of predicates into one parallel iterator
   let combined = account_preds
-    .into_par_iter() //
+    .into_par_iter()
     .chain(intent_preds.into_par_iter());
 
   // on success return the resulting state diff of this tx
@@ -84,7 +125,9 @@ fn parallel_invoke_predicates(
   context: &PredicateContext,
   predicates: impl ParallelIterator<Item = PredicateTree<Expanded>>,
 ) -> Result<(), Error> {
+  let context = to_vec(&context)?;
   let cancelled = Arc::new(AtomicBool::new(false));
+
   predicates
     .into_par_iter()
     .map(|tree| {
@@ -98,7 +141,7 @@ fn parallel_invoke_predicates(
           return;
         }
 
-        let result = match invoke(pred, context) {
+        let result = match invoke(&context, pred) {
           Ok(true) => Ok(()),
           Ok(false) => Err(Error::Rejected(pred.clone())),
           Err(e) => Err(e),
@@ -128,18 +171,77 @@ fn parallel_invoke_predicates(
       (Err(Error::Cancelled), Err(e)) => Err(e), // skip cancelled
       (Err(e), Err(Error::Cancelled)) => Err(e), // skip cancelled
       (Err(e1), Err(_)) => Err(e1),              // randomy pick one :-)
-                                                   
     })
     // this case happens when creating a new account
     // that has no predicates attached to any of its
-    // parents, then there are no account predicates
+    // ancestors, then there are no account predicates
     // gating this write.
     .unwrap_or(Ok(()))
 }
 
 fn invoke(
-  _predicate: &Predicate<Expanded>,
-  _context: &PredicateContext,
+  context: &[u8],
+  predicate: &Predicate<Expanded>,
 ) -> Result<bool, Error> {
-  todo!()
+  let compiler = Cranelift::default();
+  let mut store = Store::new_with_tunables(
+    compiler,
+    LimitingTunables::new(
+      BaseTunables::for_target(&Target::default()),
+      Pages(1),
+    ),
+  );
+  let module = Module::new(&store, &predicate.code.code)?;
+  let imports = imports! {};
+  let instance = Instance::new(&mut store, &module, &imports)?;
+
+  let inst_memory = instance.exports.get_memory("memory")?;
+
+  let allocate_fn = instance
+    .exports
+    .get_typed_function::<u32, WasmPtr<u8>>(&store, "__allocate")?;
+
+  let context_fn = instance
+    .exports
+    .get_typed_function::<(WasmPtr<u8>, u32), WasmPtr<u8>>(
+      &store,
+      "__ingest_context",
+    )?;
+
+  let params_fn = instance
+    .exports
+    .get_typed_function::<(WasmPtr<u8>, u32), WasmPtr<u8>>(
+      &store,
+      "__ingest_params",
+    )?;
+
+  let entrypoint_fn = instance
+    .exports
+    .get_typed_function::<(WasmPtr<u8>, WasmPtr<u8>), u8>(
+      &store,
+      &predicate.code.entrypoint,
+    )?;
+
+  let mut deliver_data =
+    |data: &[u8],
+     ingest_fn: TypedFunction<(WasmPtr<u8>, u32), WasmPtr<u8>>|
+     -> Result<WasmPtr<u8>, RuntimeError> {
+      let data_len = data.len() as u32;
+      let raw_ptr = allocate_fn.call(&mut store, data_len)?;
+      let ptr_offset = raw_ptr.offset() as u64;
+      // copy data to wasm instance memory
+      inst_memory.view(&store).write(ptr_offset, data)?;
+
+      // instantiate object in sdk-specific object model
+      ingest_fn.call(&mut store, raw_ptr, data_len)
+    };
+
+  let context_ptr = deliver_data(context, context_fn)?;
+  let params_ptr = deliver_data(&to_vec(&predicate.params)?, params_fn)?;
+
+  match entrypoint_fn.call(&mut store, params_ptr, context_ptr)? {
+    0 => Ok(false),
+    1 => Ok(true),
+    r => Err(Error::InvalidReturnValue(r)),
+  }
 }

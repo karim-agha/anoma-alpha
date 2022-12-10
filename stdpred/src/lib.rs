@@ -2,12 +2,12 @@
 
 extern crate alloc;
 
-mod bytes;
 mod arithmetic;
+mod bytes;
 mod constant;
 mod signature;
 
 use anoma_predicates_sdk::initialize_library;
-pub use {arithmetic::*, constant::*, signature::*, bytes::*};
+pub use {arithmetic::*, bytes::*, constant::*, signature::*};
 
 initialize_library!();
