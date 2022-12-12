@@ -1,6 +1,4 @@
-#![cfg(not(target_family = "wasm"))]
-
-pub fn configure_build() {
+fn main() {
   let target_family =
     std::env::var("CARGO_CFG_TARGET_FAMILY").expect("set by cargo");
 

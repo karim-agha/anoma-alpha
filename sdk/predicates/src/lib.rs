@@ -2,9 +2,8 @@
 
 mod builtins;
 
-#[cfg(target_family = "wasm")]
 extern "C" {
-  pub fn syscall_terminate();
+  pub fn syscall_debug_log(ptr: *const u8, len: u32);
 }
 
 pub use {
@@ -24,3 +23,16 @@ mod build;
 
 #[cfg(not(target_family = "wasm"))]
 pub use build::configure_build;
+
+pub fn debug_log(msg: &str) {
+  let serialized = rmp_serde::to_vec(msg).unwrap();
+  let ptr = serialized.as_ptr();
+  unsafe { syscall_debug_log(ptr, serialized.len() as u32) };
+}
+
+#[macro_export]
+macro_rules! log {
+    ($($arg:tt)*) => {
+      $crate::debug_log(&alloc::format!($($arg)*));
+    };
+}

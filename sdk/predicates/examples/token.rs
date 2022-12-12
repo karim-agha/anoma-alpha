@@ -80,7 +80,6 @@
 //! true if the modified account is equal to "/token".
 //!
 //! All state in accounts in serialized using MessagePack format.
-
 use {
   anoma_predicates_sdk::{
     predicate,

@@ -2,6 +2,8 @@ use {
   crate::{Account, Address, Exact, Intent, PredicateTree, Repr},
   alloc::{collections::BTreeMap, vec::Vec},
   core::fmt::Debug,
+  multihash::{Hasher, Multihash, MultihashDigest, Sha3_256},
+  once_cell::sync::OnceCell,
   serde::{Deserialize, Serialize},
 };
 
@@ -43,4 +45,43 @@ pub struct Transaction<R: Repr = Exact> {
   /// evaluate to true, then the account contents will be replaced by
   /// this value.
   pub proposals: BTreeMap<Address, R::AccountChange>,
+
+  #[serde(skip)]
+  hash_cache: OnceCell<Multihash>,
+}
+
+impl<R: Repr> Transaction<R> {
+  pub fn new(
+    intents: Vec<Intent<R>>,
+    proposals: BTreeMap<Address, R::AccountChange>,
+  ) -> Self {
+    Self {
+      intents,
+      proposals,
+      hash_cache: OnceCell::new(),
+    }
+  }
+
+  pub fn hash(&self) -> &Multihash {
+    self.hash_cache.get_or_init(|| {
+      let mut hasher = Sha3_256::default();
+      hasher.update(&rmp_serde::to_vec(&self.intents).unwrap());
+      hasher.update(&rmp_serde::to_vec(&self.proposals).unwrap());
+      multihash::Code::Sha3_256.wrap(hasher.finalize()).unwrap()
+    })
+  }
+}
+
+impl<R: Repr> PartialEq for Transaction<R> {
+  fn eq(&self, other: &Self) -> bool {
+    self.hash() == other.hash()
+  }
+}
+
+impl<R: Repr> Eq for Transaction<R> {}
+
+impl<R: Repr> core::hash::Hash for Transaction<R> {
+  fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+    self.hash().hash(state)
+  }
 }

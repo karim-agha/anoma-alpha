@@ -1,6 +1,12 @@
 use {
   crate::{Address, Calldata, Exact, ExpandedAccountChange, Repr},
-  alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec},
+  alloc::{
+    boxed::Box,
+    collections::BTreeMap,
+    format,
+    string::String,
+    vec::Vec,
+  },
   core::fmt::Debug,
   multihash::Multihash,
   serde::{Deserialize, Serialize},
@@ -49,12 +55,10 @@ pub enum Code {
 impl core::fmt::Debug for Code {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     match self {
-      Self::Inline(c) => {
-        let mut wasm_bytecode = String::from("[wasm-bytecode (");
-        wasm_bytecode.push_str(&c.len().to_string());
-        wasm_bytecode.push_str(") bytes]");
-        f.debug_tuple("Inline").field(&wasm_bytecode).finish()
-      }
+      Self::Inline(c) => f
+        .debug_tuple("Inline")
+        .field(&format!("[wasm-bytecode ({} bytes)]", c.len()))
+        .finish(),
       Self::AccountRef(arg0, arg1) => {
         f.debug_tuple("AccountRef").field(arg0).field(arg1).finish()
       }
@@ -70,11 +74,11 @@ pub struct ExpandedCode {
 
 impl core::fmt::Debug for ExpandedCode {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    let mut wasm_bytecode = String::from("[wasm-bytecode (");
-    wasm_bytecode.push_str(&self.code.len().to_string());
-    wasm_bytecode.push_str(" bytes)]");
     f.debug_struct("ExpandedCode")
-      .field("code", &wasm_bytecode)
+      .field(
+        "code",
+        &format!("[wasm-bytecode ({} bytes)]", self.code.len()),
+      )
       .field("entrypoint", &self.entrypoint)
       .finish()
   }

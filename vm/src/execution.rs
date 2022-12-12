@@ -10,7 +10,7 @@ use {
     Transaction,
   },
   rayon::prelude::*,
-  rmp_serde::{encode, to_vec},
+  rmp_serde::{encode, from_slice, to_vec},
   std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -18,13 +18,21 @@ use {
   thiserror::Error,
   wasmer::{
     imports,
+    AsStoreRef,
     BaseTunables,
     CompileError,
     Cranelift,
     ExportError,
+    Function,
+    FunctionEnv,
+    FunctionEnvMut,
+    Imports,
     Instance,
     InstantiationError,
+    Memory,
     MemoryAccessError,
+    MemoryError,
+    MemoryType,
     Module,
     Pages,
     RuntimeError,
@@ -45,6 +53,9 @@ pub enum Error {
 
   #[error("Predicate evaluation cancelled by other failed predicates")]
   Cancelled,
+
+  #[error("WASM memory allocation error: {0}")]
+  Memory(#[from] MemoryError),
 
   #[error("WASM bytecode compilation error: {0}")]
   Compile(#[from] CompileError),
@@ -145,6 +156,7 @@ fn parallel_invoke_predicates(
           Err(e) => {
             // on predicate crash, cancel everything
             cancelled.store(true, Ordering::Release);
+            println!("Predicate error: {e:?}, {pred:?}");
             Err(e)
           },
         }
@@ -167,10 +179,10 @@ fn invoke(
     ),
   );
 
-  let imports = imports! {};
+  let memory = Memory::new(&mut store, MemoryType::new(32, None, false))?;
+  let imports = syscalls(&mut store, &memory);
   let module = Module::from_binary(&store, &predicate.code.code)?;
   let instance = Instance::new(&mut store, &module, &imports)?;
-  let memory = instance.exports.get_memory("memory")?;
 
   let allocate_fn = instance
     .exports
@@ -265,4 +277,33 @@ fn or<T>(a: Result<T, Error>, b: Result<T, Error>) -> Result<T, Error> {
     (Err(e), _) => Err(e),
     (_, Err(e)) => Err(e),
   }
+}
+
+fn syscalls(store: &mut Store, memory: &Memory) -> Imports {
+  let env = FunctionEnv::new(store, memory.clone());
+
+  imports! {
+    "env" => {
+      "memory" => memory.clone(),
+      "syscall_debug_log" => Function::new_typed_with_env(store, &env, debug_log)
+    }
+  }
+}
+
+#[cfg(debug_assertions)]
+fn debug_log(env: FunctionEnvMut<Memory>, ptr: u32, len: u32) {
+  let mut buffer = vec![0u8; len as usize];
+  env
+    .data()
+    .view(&env.as_store_ref())
+    .read(ptr as u64, &mut buffer)
+    .expect("SDK debug log function is not packing the message correctly");
+  let message: String = from_slice(&buffer)
+    .expect("SDK debug log function is not packing the message correctly");
+  println!("VM debug log: {message}");
+}
+
+#[cfg(not(debug_assertions))]
+fn debug_log(env: FunctionEnvMut<Memory>, ptr: u32, len: u32) {
+  // noop in non-debug builds
 }

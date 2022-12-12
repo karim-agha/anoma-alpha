@@ -12,13 +12,8 @@ fn require_ed25519_signature(
   params: &Vec<ExpandedParam>,
   context: &PredicateContext,
 ) -> bool {
-  assert_eq!(params.len(), 2);
-
-  let mut args = params.iter();
-  let pubkey: PublicKey =
-    rmp_serde::from_slice(args.next().expect("asserted").data())
-      .expect("invalid public key format");
-
+  assert_eq!(params.len(), 1);
+  let pubkey = PublicKey::from_bytes(params[0].data()).expect("invalid pubkey");
   let expected_calldata_key = bs58::encode(&pubkey.as_bytes()).into_string();
   for (hash, calldata) in &context.calldata {
     if let Some(signature) = calldata.get(&expected_calldata_key) {
@@ -27,6 +22,5 @@ fn require_ed25519_signature(
       }
     }
   }
-
   false
 }
