@@ -2,7 +2,7 @@ mod common;
 use {
   anoma_primitives::{Address, Code, Param, Predicate, PredicateTree},
   anoma_vm::{InMemoryStateStore, State},
-  common::create_initial_blockchain_state,
+  common::{create_initial_blockchain_state, precache_predicates_bytecode},
   ed25519_dalek::Keypair,
   multihash::MultihashDigest,
   rmp_serde::to_vec,
@@ -16,6 +16,16 @@ fn mint_tokens() -> anyhow::Result<()> {
   let mut store = InMemoryStateStore::default();
   store.apply(create_initial_blockchain_state(mint_keypair.public));
 
+  let mut cache = InMemoryStateStore::default();
+  cache.apply(precache_predicates_bytecode(
+    &store,
+    &"/token".parse().unwrap(),
+  ));
+  cache.apply(precache_predicates_bytecode(
+    &store,
+    &"/predicates/std".parse().unwrap(),
+  ));
+
   let wallet1keypair = Keypair::generate(&mut rand::thread_rng());
   let mint_tx = common::token_ops::mint(
     1000,
@@ -27,7 +37,7 @@ fn mint_tokens() -> anyhow::Result<()> {
   )?;
 
   // run transaction in the VM and get state diff
-  let outdiff = anoma_vm::execute(mint_tx, &store)?;
+  let outdiff = anoma_vm::execute(mint_tx, &store, &cache)?;
 
   assert_eq!(outdiff.iter().count(), 2);
   assert!(outdiff.get(&"/token/usdx".parse()?).is_some());
@@ -114,7 +124,7 @@ fn mint_tokens() -> anyhow::Result<()> {
   )?;
 
   // second mint tx
-  store.apply(anoma_vm::execute(second_mint, &store)?);
+  store.apply(anoma_vm::execute(second_mint, &store, &cache)?);
 
   // prev mint 1000 + second mint 500
   assert_eq!(

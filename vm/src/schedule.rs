@@ -1,5 +1,5 @@
 use {
-  crate::{execute, execution, State, StateDiff},
+  crate::{execute, execution, syncell::SynCell, State, StateDiff},
   anoma_primitives::{Address, Code, Param, Transaction},
   petgraph::{
     dot,
@@ -22,15 +22,16 @@ use {
 /// collection of results is in the same order as the input txs.
 pub fn execute_many(
   state: &impl State,
+  cache: &impl State,
   txs: impl Iterator<Item = Transaction>,
 ) -> Vec<Result<StateDiff, execution::Error>> {
-  Schedule::new(state, txs)
-    .run(|tx| execute(tx, state))
-    .collect()
+  Schedule::new(state, txs).run(state, cache).collect()
 }
 
+type NodeType = SynCell<Option<(Transaction, usize)>>;
+
 struct Schedule {
-  graph: DiGraph<(Transaction, usize), ()>,
+  graph: DiGraph<NodeType, ()>,
   roots: Vec<NodeIndex>,
 }
 
@@ -49,17 +50,26 @@ impl<'s> std::fmt::Debug for Tree<'s> {
 }
 
 impl<'s> Tree<'s> {
-  pub fn run<F, R>(self, op: F) -> impl Iterator<Item = R>
-  where
-    F: Fn(Transaction) -> R,
-  {
+  pub fn run(
+    self,
+    state: &impl State,
+    cache: &impl State,
+  ) -> impl Iterator<Item = (Result<StateDiff, execution::Error>, usize)> {
     let mut txs = vec![];
     let mut iter = Bfs::new(&self.schedule.graph, self.root);
-    while let Some(tx) = iter.next(&self.schedule.graph) {
-      txs.push(tx);
+    while let Some(ix) = iter.next(&self.schedule.graph) {
+      let mut tx = self
+        .schedule
+        .graph
+        .node_weight(ix)
+        .expect("retreived through traversal")
+        .borrow_mut();
+      let (tx, ix) = tx.take().expect("transaction visited more than once");
+      println!("running tx {ix}");
+      txs.push((execute(tx, state, cache), ix));
     }
-    println!("running tree {self:#?}, txs: {txs:?}");
-    vec![].into_iter().map(op)
+
+    txs.into_iter()
   }
 }
 
@@ -68,11 +78,14 @@ impl Schedule {
     state: &impl State,
     txs: impl Iterator<Item = Transaction>,
   ) -> Self {
-    let mut graph = DiGraph::<(Transaction, usize), ()>::new();
+    let mut graph = DiGraph::new();
     let mut refs: VecDeque<(_, _)> = txs
       .enumerate()
       .map(|(ix, tx)| {
-        (TransactionRefs::new(&tx, state), graph.add_node((tx, ix)))
+        (
+          TransactionRefs::new(&tx, state),
+          graph.add_node(SynCell::new(Some((tx, ix)))),
+        )
       })
       .collect();
 
@@ -92,18 +105,21 @@ impl Schedule {
     }
   }
 
-  pub fn run<F, R>(self, op: F) -> impl Iterator<Item = R>
-  where
-    F: Fn(Transaction) -> R + Sync + Send + Clone,
-    R: Sync + Send,
-  {
+  pub fn run(
+    self,
+    state: &impl State,
+    cache: &impl State,
+  ) -> impl Iterator<Item = Result<StateDiff, execution::Error>> {
     println!("running schedule: {self:?}");
-    let _trees: Vec<_> = self
+    let mut trees: Vec<(Result<StateDiff, execution::Error>, usize)> = self
       .trees()
       .into_par_iter()
-      .map(|tree: Tree| tree.run(op.clone()))
+      .map(|tree: Tree| tree.run(state, cache).collect::<Vec<_>>())
+      .flatten()
       .collect();
-    vec![].into_iter().map(op)
+
+    trees.sort_by(|(_, ix1), (_, ix2)| ix1.cmp(ix2));
+    trees.into_iter().map(|(tx, _)| tx)
   }
 
   /// Returns all independent dependency trees in the schedule
@@ -124,7 +140,7 @@ impl Schedule {
   /// the tx dependency graph. Those trees can be scheduled in parallel.
   /// The returned nodes are roots of every identified dependency tree
   /// in the transaction list.
-  fn roots(graph: &DiGraph<(Transaction, usize), ()>) -> Vec<NodeIndex> {
+  fn roots(graph: &DiGraph<NodeType, ()>) -> Vec<NodeIndex> {
     let mut vertex_sets = UnionFind::new(graph.node_bound());
     for edge in graph.edge_references() {
       let (a, b) = (edge.source(), edge.target());

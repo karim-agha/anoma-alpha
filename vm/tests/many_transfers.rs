@@ -1,7 +1,7 @@
 use {
   anoma_primitives::Address,
   anoma_vm::{InMemoryStateStore, State},
-  common::create_initial_blockchain_state,
+  common::{create_initial_blockchain_state, precache_predicates_bytecode},
   ed25519_dalek::Keypair,
   multihash::MultihashDigest,
   rand::Rng,
@@ -17,6 +17,16 @@ fn make_1000_transfers() -> anyhow::Result<()> {
   let mut store = InMemoryStateStore::default();
   store.apply(create_initial_blockchain_state(mint_keypair.public));
 
+  let mut cache = InMemoryStateStore::default();
+  cache.apply(precache_predicates_bytecode(
+    &store,
+    &"/token".parse().unwrap(),
+  ));
+  cache.apply(precache_predicates_bytecode(
+    &store,
+    &"/predicates/std".parse().unwrap(),
+  ));
+
   let doner_keypair = Keypair::generate(&mut rand::thread_rng());
   let doner_address = "/token/usdx/rich_guy1.eth".parse()?;
 
@@ -30,9 +40,12 @@ fn make_1000_transfers() -> anyhow::Result<()> {
       &store,
     )?,
     &store,
+    &cache,
   )?);
 
-  let population: Vec<_> = (0..100)
+  let factor = 10;
+
+  let population: Vec<_> = (0..10 * factor)
     .into_iter()
     .map(|i| {
       (
@@ -44,19 +57,6 @@ fn make_1000_transfers() -> anyhow::Result<()> {
 
   let half = population.len() / 2;
   let mut txs = Vec::with_capacity(population.len());
-
-  for _ in 0..1000 {
-    let rand_sender = rand::thread_rng().gen_range(0, population.len());
-    let rand_recipient = rand::thread_rng().gen_range(0, population.len());
-    txs.push(common::token_ops::transfer_unchecked(
-      40,
-      &population[rand_sender].0,
-      &population[rand_sender].1,
-      &population[rand_recipient].0,
-      &population[rand_recipient].1.public,
-      recent_blockhash,
-    )?)
-  }
 
   txs.push(common::token_ops::mint(
     10000,
@@ -79,7 +79,7 @@ fn make_1000_transfers() -> anyhow::Result<()> {
     )?);
   }
 
-  for i in 0..half {
+  for i in 0..half - 1 {
     txs.push(common::token_ops::transfer_unchecked(
       40,
       &population[i].0,
@@ -90,7 +90,7 @@ fn make_1000_transfers() -> anyhow::Result<()> {
     )?)
   }
 
-  for _ in 0..1000 {
+  for _ in 0..10 * factor * factor {
     let rand_sender = rand::thread_rng().gen_range(0, population.len());
     let rand_recipient = rand::thread_rng().gen_range(0, population.len());
     txs.push(common::token_ops::transfer_unchecked(
@@ -103,7 +103,8 @@ fn make_1000_transfers() -> anyhow::Result<()> {
     )?)
   }
 
-  anoma_vm::execute_many(&store, txs.into_iter());
+  let results = anoma_vm::execute_many(&store, &cache, txs.into_iter());
+  println!("{results:#?}");
 
   Ok(())
 }

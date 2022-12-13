@@ -1,14 +1,16 @@
 #![allow(clippy::result_large_err)]
 
 use {
-  crate::{collect, limits::LimitingTunables, State, StateDiff},
+  crate::{collect, State, StateDiff},
   anoma_primitives::{
+    Address,
     Expanded,
     Predicate,
     PredicateContext,
     PredicateTree,
     Transaction,
   },
+  multihash::{Code, MultihashDigest},
   rayon::prelude::*,
   rmp_serde::{encode, from_slice, to_vec},
   std::sync::{
@@ -19,7 +21,6 @@ use {
   wasmer::{
     imports,
     AsStoreRef,
-    BaseTunables,
     CompileError,
     Cranelift,
     ExportError,
@@ -34,10 +35,8 @@ use {
     MemoryError,
     MemoryType,
     Module,
-    Pages,
     RuntimeError,
     Store,
-    Target,
     TypedFunction,
     WasmPtr,
   },
@@ -89,6 +88,7 @@ pub enum Error {
 pub fn execute(
   tx: Transaction,
   state: &impl State,
+  cache: &impl State,
 ) -> Result<StateDiff, Error> {
   // those changes will be applied if all predicates
   // evaluate to true in intents and mutated accounts.
@@ -120,7 +120,7 @@ pub fn execute(
     .chain(intent_preds.into_par_iter());
 
   // on success return the resulting state diff of this tx
-  match parallel_invoke_predicates(&context, combined) {
+  match parallel_invoke_predicates(&context, combined, cache) {
     Ok(()) => Ok(state_diff),
     Err(e) => Err(e),
   }
@@ -134,6 +134,7 @@ pub fn execute(
 fn parallel_invoke_predicates(
   context: &PredicateContext,
   predicates: impl ParallelIterator<Item = PredicateTree<Expanded>>,
+  cache: &impl State,
 ) -> Result<(), Error> {
   let context = to_vec(&context)?;
   let cancelled = Arc::new(AtomicBool::new(false));
@@ -150,7 +151,7 @@ fn parallel_invoke_predicates(
           return Err(Error::Cancelled);
         }
 
-        match invoke(&context, &pred) {
+        match invoke(&context, &pred, cache) {
           Ok(true) => Ok(pred),
           Ok(false) => Err(Error::Rejected(pred)),
           Err(e) => {
@@ -169,19 +170,27 @@ fn parallel_invoke_predicates(
 fn invoke(
   context: &[u8],
   predicate: &Predicate<Expanded>,
+  cache: &impl State,
 ) -> Result<bool, Error> {
   let compiler = Cranelift::default();
-  let mut store = Store::new_with_tunables(
-    compiler,
-    LimitingTunables::new(
-      BaseTunables::for_target(&Target::default()),
-      Pages(100),
-    ),
-  );
+  let mut store = Store::new(compiler);
+
+  let codehash = Code::Sha3_256.digest(&predicate.code.code);
+  let cachekey = Address::new(format!(
+    "/predcache/{}",
+    bs58::encode(codehash.to_bytes()).into_string()
+  ))
+  .expect("format validate at compile time");
+  let module = match cache.get(&cachekey) {
+    Some(val) => match unsafe { Module::deserialize(&store, val.state) } {
+      Ok(module) => module,
+      Err(_) => Module::from_binary(&store, &predicate.code.code)?,
+    },
+    None => Module::from_binary(&store, &predicate.code.code)?,
+  };
 
   let memory = Memory::new(&mut store, MemoryType::new(32, None, false))?;
   let imports = syscalls(&mut store, &memory);
-  let module = Module::from_binary(&store, &predicate.code.code)?;
   let instance = Instance::new(&mut store, &module, &imports)?;
 
   let allocate_fn = instance

@@ -1,6 +1,6 @@
 use {
   anoma_vm::{InMemoryStateStore, State},
-  common::create_initial_blockchain_state,
+  common::{create_initial_blockchain_state, precache_predicates_bytecode},
   ed25519_dalek::Keypair,
   multihash::MultihashDigest,
   rmp_serde::from_slice,
@@ -15,6 +15,16 @@ fn transfer_token() -> anyhow::Result<()> {
 
   let mut store = InMemoryStateStore::default();
   store.apply(create_initial_blockchain_state(mint_keypair.public));
+
+  let mut cache = InMemoryStateStore::default();
+  cache.apply(precache_predicates_bytecode(
+    &store,
+    &"/token".parse().unwrap(),
+  ));
+  cache.apply(precache_predicates_bytecode(
+    &store,
+    &"/predicates/std".parse().unwrap(),
+  ));
 
   let alice_keypair = Keypair::generate(&mut rand::thread_rng());
   let alice_address = &"/token/usdx/alice.eth".parse()?;
@@ -32,6 +42,7 @@ fn transfer_token() -> anyhow::Result<()> {
       &store,
     )?,
     &store,
+    &cache,
   )?);
 
   assert_eq!(
@@ -52,6 +63,7 @@ fn transfer_token() -> anyhow::Result<()> {
       &store,
     )?,
     &store,
+    &cache,
   )?);
 
   assert_eq!(

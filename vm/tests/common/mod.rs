@@ -1,3 +1,8 @@
+use {
+  multihash::MultihashDigest,
+  wasmer::{Cranelift, Module, Store},
+};
+
 pub mod token_ops;
 
 use {
@@ -126,4 +131,37 @@ pub fn create_initial_blockchain_state(mint_authority: PublicKey) -> StateDiff {
   state.apply(install_token_bytecode());
   state.apply(create_usdx_token(mint_authority));
   state
+}
+
+pub fn precache_predicates_bytecode(
+  state: &impl State,
+  addr: &Address,
+) -> StateDiff {
+  let bytecode = state.get(addr).expect("bytecode not found").state;
+  let codehash = multihash::Code::Sha3_256.digest(&bytecode);
+
+  let compiler = Cranelift::default();
+  let store = Store::new(compiler);
+  let compiled = Module::from_binary(&store, &bytecode)
+    .expect("compilation failed")
+    .serialize()
+    .expect("compiled wasm serialization failed");
+
+  let mut diff = StateDiff::default();
+  diff.set(
+    format!(
+      "/predcache/{}",
+      bs58::encode(codehash.to_bytes()).into_string()
+    )
+    .parse()
+    .expect("validated at compile time"),
+    Account {
+      state: compiled.to_vec(),
+      predicates: PredicateTree::Id(Predicate {
+        code: Code::Inline(vec![]),
+        params: vec![],
+      }),
+    },
+  );
+  diff
 }
