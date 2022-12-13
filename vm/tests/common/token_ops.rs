@@ -231,3 +231,90 @@ pub fn transfer(
     .collect(),
   ))
 }
+
+pub fn transfer_unchecked(
+  amount: u64,
+  sender: &Address,
+  sender_keypair: &Keypair,
+  recipient: &Address,
+  recipient_pubkey: &PublicKey,
+  recent_blockhash: Multihash,
+) -> anyhow::Result<Transaction> {
+  let mut transfer_intent = Intent::new(
+    recent_blockhash,
+    PredicateTree::<Exact>::And(
+      Box::new(PredicateTree::Id(Predicate {
+        code: Code::AccountRef(
+          "/predicates/std".parse()?,
+          "uint_less_than_by".into(),
+        ),
+        params: vec![
+          Param::ProposalRef(sender.clone()),
+          Param::AccountRef(sender.clone()),
+          Param::Inline(to_vec(&amount)?),
+        ],
+      })),
+      Box::new(PredicateTree::Id(Predicate {
+        code: Code::AccountRef(
+          "/predicates/std".parse()?,
+          "uint_greater_than_equal".into(),
+        ),
+        params: vec![
+          Param::ProposalRef(recipient.clone()),
+          Param::Inline(to_vec(&amount)?),
+        ],
+      })),
+    ),
+  );
+
+  // sign intent by sender
+  transfer_intent.calldata.insert(
+    bs58::encode(sender_keypair.public.as_bytes()).into_string(),
+    sender_keypair
+      .sign(transfer_intent.signing_hash().to_bytes().as_slice())
+      .to_bytes()
+      .to_vec(),
+  );
+
+  let new_sender_balance = amount; 
+
+  let new_recipient_balance = amount;
+
+  let sender_acc_change =
+    AccountChange::ReplaceState(to_vec(&new_sender_balance)?);
+  let recipient_acc_change = 
+    AccountChange::CreateAccount(Account {
+      state: to_vec(&new_recipient_balance)?,
+      predicates: PredicateTree::Or(
+        Box::new(PredicateTree::Id(Predicate {
+          code: Code::AccountRef(
+            "/predicates/std".parse()?,
+            "uint_greater_than_equal".into(),
+          ),
+          params: vec![
+            Param::ProposalRef(recipient.clone()),
+            Param::AccountRef(recipient.clone()),
+          ],
+        })),
+        Box::new(PredicateTree::Id(Predicate {
+          // If proposed balance is not greater that current balance
+          // then require a signature to authorize spending
+          code: Code::AccountRef(
+            "/predicates/std".parse()?,
+            "require_ed25519_signature".into(),
+          ),
+          params: vec![Param::Inline(recipient_pubkey.to_bytes().to_vec())],
+        })),
+      ),
+    });
+
+  Ok(Transaction::new(
+    vec![transfer_intent], //
+    [
+      (recipient.clone(), recipient_acc_change),
+      (sender.clone(), sender_acc_change),
+    ]
+    .into_iter()
+    .collect(),
+  ))
+}

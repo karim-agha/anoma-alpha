@@ -22,7 +22,7 @@ ed25519-dalek = { version = "1", features = [
   "serde",
   "u64_backend",
 ] }
-
+petgraph = "0.6.2"
 
 [dev-dependencies]
 anyhow = "1"

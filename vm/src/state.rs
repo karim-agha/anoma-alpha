@@ -87,7 +87,7 @@ impl State for StateDiff {
 }
 
 /// Implemented by all types that store accounts data.
-pub trait State {
+pub trait State: Sync + Send {
   /// Retreive an account by its address.
   fn get(&self, address: &Address) -> Option<Account>;
 

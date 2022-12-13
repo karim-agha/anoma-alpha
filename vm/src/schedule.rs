@@ -1,7 +1,16 @@
 use {
-  crate::{execution, State, StateDiff},
+  crate::{execute, execution, State, StateDiff},
   anoma_primitives::{Address, Code, Param, Transaction},
-  std::collections::{HashMap, HashSet, VecDeque},
+  petgraph::{
+    dot,
+    prelude::DiGraph,
+    stable_graph::NodeIndex,
+    unionfind::UnionFind,
+    visit::{Bfs, EdgeRef, NodeIndexable},
+    Direction,
+  },
+  rayon::prelude::*,
+  std::collections::{HashSet, VecDeque},
 };
 
 /// Runs multiple transactions in parallel, while preserving read/write
@@ -15,31 +24,154 @@ pub fn execute_many(
   state: &impl State,
   txs: impl Iterator<Item = Transaction>,
 ) -> Vec<Result<StateDiff, execution::Error>> {
-  // all txs with their account r/w dependencies
-  let mut refs: VecDeque<(_, _)> = txs
-    .map(|tx| (*tx.hash(), TransactionRefs::new(&tx, state)))
-    .collect();
+  Schedule::new(state, txs)
+    .run(|tx| execute(tx, state))
+    .collect()
+}
 
-  // identify all r/w dependencies for this tx ordering
-  let mut deps = HashMap::new(); // adjacency list
-  while let Some((thishash, thisrefs)) = refs.pop_back() {
-    deps.insert(thishash, {
-      let mut thisdeps = HashSet::new();
-      for (hash, r) in refs.iter() {
-        if thisrefs.depends_on(r) {
-          thisdeps.insert(*hash);
+struct Schedule {
+  graph: DiGraph<(Transaction, usize), ()>,
+  roots: Vec<NodeIndex>,
+}
+
+struct Tree<'s> {
+  schedule: &'s Schedule,
+  root: NodeIndex,
+}
+
+impl<'s> std::fmt::Debug for Tree<'s> {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("Tree")
+      .field("graph", &"[schedule]")
+      .field("root", &self.root)
+      .finish()
+  }
+}
+
+impl<'s> Tree<'s> {
+  pub fn run<F, R>(self, op: F) -> impl Iterator<Item = R>
+  where
+    F: Fn(Transaction) -> R,
+  {
+    let mut txs = vec![];
+    let mut iter = Bfs::new(&self.schedule.graph, self.root);
+    while let Some(tx) = iter.next(&self.schedule.graph) {
+      txs.push(tx);
+    }
+    println!("running tree {self:#?}, txs: {txs:?}");
+    vec![].into_iter().map(op)
+  }
+}
+
+impl Schedule {
+  pub fn new(
+    state: &impl State,
+    txs: impl Iterator<Item = Transaction>,
+  ) -> Self {
+    let mut graph = DiGraph::<(Transaction, usize), ()>::new();
+    let mut refs: VecDeque<(_, _)> = txs
+      .enumerate()
+      .map(|(ix, tx)| {
+        (TransactionRefs::new(&tx, state), graph.add_node((tx, ix)))
+      })
+      .collect();
+
+    // identify all r/w dependencies for this tx ordering
+    while let Some((r0, ix0)) = refs.pop_back() {
+      'inner: for (r1, ix1) in refs.iter().rev() {
+        if r0.depends_on(r1) {
+          graph.add_edge(*ix1, ix0, ());
+          break 'inner;
         }
       }
-      thisdeps
-    });
+    }
+
+    Self {
+      roots: Self::roots(&graph),
+      graph,
+    }
   }
-  
-  todo!()
+
+  pub fn run<F, R>(self, op: F) -> impl Iterator<Item = R>
+  where
+    F: Fn(Transaction) -> R + Sync + Send + Clone,
+    R: Sync + Send,
+  {
+    println!("running schedule: {self:?}");
+    let _trees: Vec<_> = self
+      .trees()
+      .into_par_iter()
+      .map(|tree: Tree| tree.run(op.clone()))
+      .collect();
+    vec![].into_iter().map(op)
+  }
+
+  /// Returns all independent dependency trees in the schedule
+  /// deps graph. Each tree is safe to be scheduled in parallel
+  /// with other trees.
+  fn trees(&self) -> Vec<Tree<'_>> {
+    self
+      .roots
+      .iter()
+      .map(|r| Tree {
+        schedule: self,
+        root: *r,
+      })
+      .collect()
+  }
+
+  /// This function identifies independent disjoint trees in
+  /// the tx dependency graph. Those trees can be scheduled in parallel.
+  /// The returned nodes are roots of every identified dependency tree
+  /// in the transaction list.
+  fn roots(graph: &DiGraph<(Transaction, usize), ()>) -> Vec<NodeIndex> {
+    let mut vertex_sets = UnionFind::new(graph.node_bound());
+    for edge in graph.edge_references() {
+      let (a, b) = (edge.source(), edge.target());
+      vertex_sets.union(graph.to_index(a), graph.to_index(b));
+    }
+
+    // the labels vector is a list of nodes, that is equal in length
+    // to the number of independent trees in the graph with a node
+    // from each tree in the "lables" vector.
+    let mut labels = vertex_sets.into_labeling();
+    labels.sort_unstable();
+    labels.dedup();
+
+    // now find the root of each tree
+    let mut roots = Vec::with_capacity(labels.len());
+    for label in labels {
+      let mut index = graph.from_index(label);
+      while let Some(up) = // follow edges until root
+        graph.edges_directed(index, Direction::Incoming).last()
+      {
+        index = up.source()
+      }
+      roots.push(index);
+    }
+
+    roots
+  }
+}
+
+impl std::fmt::Debug for Schedule {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("Schedule")
+      .field(
+        "graph",
+        &dot::Dot::with_config(&self.graph, &[
+          dot::Config::EdgeNoLabel,
+          dot::Config::NodeIndexLabel,
+        ]),
+      )
+      .field("roots", &self.roots)
+      .finish()
+  }
 }
 
 /// Specifies the list of all accounts that a transaction will read or write to.
 /// This is used when scheduling transactions for execution in parallel.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 struct TransactionRefs {
   reads: HashSet<Address>,
   writes: HashSet<Address>,
