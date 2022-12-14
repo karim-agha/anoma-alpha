@@ -80,8 +80,11 @@
 //! true if the modified account is equal to "/token".
 //!
 //! All state in accounts in serialized using MessagePack format.
+
 use {
   anoma_predicates_sdk::{
+    initialize_library,
+    log,
     predicate,
     Address,
     ExpandedAccountChange,
@@ -96,6 +99,8 @@ use {
 // we want versioning of state/contract.
 type TokenSupply = u64;
 type WalletBalance = u64;
+
+initialize_library!();
 
 #[predicate]
 fn predicate(params: &Vec<ExpandedParam>, context: &PredicateContext) -> bool {
@@ -133,55 +138,106 @@ fn predicate(params: &Vec<ExpandedParam>, context: &PredicateContext) -> bool {
     // balances and that this change in the token supply value is authorized
     // by the mint authority.
     if !is_signed_by_mint_auth(&mint_auth, context) {
+      log!(
+        "Imbalanced token transaction rejected (pre: {pre}, post: {post}) \
+         because it is not signed by mint authority."
+      );
       return false;
     }
 
     let total_supply_proposal = match context.proposals.get(&self_addr) {
       Some(v) => v,
-      None => return false, // tx did not update the total supply, fail.
+      None => {
+        log!(
+          "Imbalanced token transaction rejected (pre: {pre}, post: {post}) \
+           because its token total supply was not updated."
+        );
+        return false; // tx did not update the total supply, fail.
+      }
     };
 
     // now veriy that the new total supply value is correct.
     let expected_new_supply = current_total_supply + post - pre;
 
     if pre < post {
-      match total_supply_proposal {
+      let proposed_supply = match total_supply_proposal {
         // this is the case for the very first mint of this token
         ExpandedAccountChange::CreateAccount(acc) => {
-          read_total_supply(&acc.state) == expected_new_supply
+          read_total_supply(&acc.state)
         }
 
         // verify that the new total supply is equal to the increase in
         // balances sum in this transaction
         ExpandedAccountChange::ReplaceState { proposed, .. } => {
-          read_total_supply(proposed) == expected_new_supply
+          read_total_supply(proposed)
         }
 
         // Global token accounts are expected to have immutable predicates
         // after they are created
-        ExpandedAccountChange::ReplacePredicates { .. } => false,
+        ExpandedAccountChange::ReplacePredicates { .. } => return false,
 
         // tokens minted, can't delete this token type before burning
         // all circulating tokens.
-        ExpandedAccountChange::DeleteAccount { .. } => false,
+        ExpandedAccountChange::DeleteAccount { .. } => return false,
+      };
+
+      if proposed_supply != expected_new_supply {
+        log!(
+          "Imbalanced token transaction rejected (pre: {pre}, post: {post}) \
+           because the updated total supply value is invalid (expected: \
+           {expected_new_supply}, actual: {proposed_supply})."
+        );
+        return false;
       }
+      true
     } else {
       match total_supply_proposal {
         // Can't burn tokens from a token that does not exist yet
-        ExpandedAccountChange::CreateAccount(_) => false,
-
+        ExpandedAccountChange::CreateAccount(_) => {
+          log!(
+            "Imbalanced token transaction rejected (pre: {pre}, post: \
+             {post}). Cannot burn tokens from a token type that does not \
+             exist yet."
+          );
+          false
+        }
         // verify that the new total supply is equal to the increase in
         // balances sum in this transaction
         ExpandedAccountChange::ReplaceState { proposed, .. } => {
-          read_total_supply(proposed) == expected_new_supply
+          let proposed_supply = read_total_supply(proposed);
+          if proposed_supply != expected_new_supply {
+            log!(
+              "Imbalanced token transaction rejected (pre: {pre}, post: \
+               {post}) because the updated total supply value is invalid \
+               (expected: {expected_new_supply}, actual: {proposed_supply})."
+            );
+            return false;
+          }
+          true
         }
 
         // Global token accounts are expected to have immutable predicates
         // after they are created
-        ExpandedAccountChange::ReplacePredicates { .. } => false,
+        ExpandedAccountChange::ReplacePredicates { .. } => {
+          log!(
+            "Global token accounts are expected to have immutable predicates \
+             after creation."
+          );
+          false
+        }
 
         // token account can be deleted only if all tokens were burnt
-        ExpandedAccountChange::DeleteAccount { .. } => expected_new_supply == 0,
+        ExpandedAccountChange::DeleteAccount { .. } => {
+          if expected_new_supply != 0 {
+            log!(
+              "Imbalanced token transaction rejected (pre: {pre}, post: \
+               {post}). Cannot delete a token type without burning all its \
+               tokens."
+            );
+            return false;
+          }
+          true
+        }
       }
     }
   }

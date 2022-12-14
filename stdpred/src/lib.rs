@@ -1,7 +1,5 @@
 #![no_std]
 
-extern crate alloc;
-
 mod arithmetic;
 mod bytes;
 mod constant;

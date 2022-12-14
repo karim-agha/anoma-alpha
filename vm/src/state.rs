@@ -95,6 +95,38 @@ pub trait State: Sync + Send {
   fn apply(&mut self, diff: StateDiff);
 }
 
+/// Represents a view of two overlayed states without modifying any of them.
+///
+/// The entire state of the chain can be represented as a chain
+/// of combined partial states produced by all transactions or blocks
+/// executed in order.
+pub struct Overlayed<'s1, 's2> {
+  base: &'s1 dyn State,
+  overlay: &'s2 dyn State,
+}
+
+impl<'s1, 's2> Overlayed<'s1, 's2> {
+  /// Creates a new combines state view
+  pub fn new(base: &'s1 dyn State, overlay: &'s2 dyn State) -> Self {
+    Self { base, overlay }
+  }
+}
+
+impl<'s1, 's2> State for Overlayed<'s1, 's2> {
+  /// Retreives a value at a given key, first tries to get it from
+  /// the overlay and then the base state.
+  fn get(&self, address: &Address) -> Option<Account> {
+    match self.overlay.get(address) {
+      None => self.base.get(address),
+      Some(value) => Some(value),
+    }
+  }
+
+  fn apply(&mut self, _: StateDiff) {
+    unimplemented!("this state type is read only");
+  }
+}
+
 /// This store is used in testing and other short-lived
 /// scenarios such as simulators or SDK examples.
 #[derive(Debug, Default)]

@@ -1,5 +1,12 @@
 use {
-  crate::{execute, execution, syncell::SynCell, State, StateDiff},
+  crate::{
+    execute,
+    execution,
+    state::Overlayed,
+    syncell::SynCell,
+    State,
+    StateDiff,
+  },
   anoma_primitives::{Address, Code, Param, Transaction},
   petgraph::{
     dot,
@@ -56,6 +63,7 @@ impl<'s> Tree<'s> {
     cache: &impl State,
   ) -> impl Iterator<Item = (Result<StateDiff, execution::Error>, usize)> {
     let mut txs = vec![];
+    let mut acc_state = StateDiff::default();
     let mut iter = Bfs::new(&self.schedule.graph, self.root);
     while let Some(ix) = iter.next(&self.schedule.graph) {
       let mut tx = self
@@ -64,9 +72,21 @@ impl<'s> Tree<'s> {
         .node_weight(ix)
         .expect("retreived through traversal")
         .borrow_mut();
+
+      // always keep track of the transaction position in the block, so that
+      // later all execution results are ordered in the same order as they
+      // appear in the block.
       let (tx, ix) = tx.take().expect("transaction visited more than once");
-      println!("running tx {ix}");
-      txs.push((execute(tx, state, cache), ix));
+      let exec_result = execute(tx, &Overlayed::new(state, &acc_state), cache);
+
+      // accumulate state changes within one tx dependency path,
+      // the next tx in this dependency path needs to see mutations
+      // resulting from previous tx.
+      if let Ok(ref diff) = exec_result {
+        acc_state.apply(diff.clone());
+      }
+
+      txs.push((exec_result, ix));
     }
 
     txs.into_iter()
@@ -110,7 +130,6 @@ impl Schedule {
     state: &impl State,
     cache: &impl State,
   ) -> impl Iterator<Item = Result<StateDiff, execution::Error>> {
-    println!("running schedule: {self:?}");
     let mut trees: Vec<(Result<StateDiff, execution::Error>, usize)> = self
       .trees()
       .into_par_iter()

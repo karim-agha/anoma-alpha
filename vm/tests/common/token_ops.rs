@@ -233,35 +233,30 @@ pub fn transfer(
 }
 
 pub fn transfer_unchecked(
-  amount: u64,
   sender: &Address,
   sender_keypair: &Keypair,
+  sender_new_balance: u64,
   recipient: &Address,
   recipient_pubkey: &PublicKey,
+  recipient_new_balance: u64,
+  recipient_create_account: bool,
   recent_blockhash: Multihash,
 ) -> anyhow::Result<Transaction> {
   let mut transfer_intent = Intent::new(
     recent_blockhash,
     PredicateTree::<Exact>::And(
       Box::new(PredicateTree::Id(Predicate {
-        code: Code::AccountRef(
-          "/predicates/std".parse()?,
-          "uint_less_than_by".into(),
-        ),
+        code: Code::AccountRef("/predicates/std".parse()?, "uint_equal".into()),
         params: vec![
           Param::ProposalRef(sender.clone()),
-          Param::AccountRef(sender.clone()),
-          Param::Inline(to_vec(&amount)?),
+          Param::Inline(to_vec(&sender_new_balance)?),
         ],
       })),
       Box::new(PredicateTree::Id(Predicate {
-        code: Code::AccountRef(
-          "/predicates/std".parse()?,
-          "uint_greater_than_equal".into(),
-        ),
+        code: Code::AccountRef("/predicates/std".parse()?, "uint_equal".into()),
         params: vec![
           Param::ProposalRef(recipient.clone()),
-          Param::Inline(to_vec(&amount)?),
+          Param::Inline(to_vec(&recipient_new_balance)?),
         ],
       })),
     ),
@@ -276,15 +271,11 @@ pub fn transfer_unchecked(
       .to_vec(),
   );
 
-  let new_sender_balance = amount; 
-
-  let new_recipient_balance = amount;
-
   let sender_acc_change =
-    AccountChange::ReplaceState(to_vec(&new_sender_balance)?);
-  let recipient_acc_change = 
-    AccountChange::CreateAccount(Account {
-      state: to_vec(&new_recipient_balance)?,
+    AccountChange::ReplaceState(to_vec(&sender_new_balance)?);
+  let recipient_acc_change = match recipient_create_account {
+    true => AccountChange::CreateAccount(Account {
+      state: to_vec(&recipient_new_balance)?,
       predicates: PredicateTree::Or(
         Box::new(PredicateTree::Id(Predicate {
           code: Code::AccountRef(
@@ -306,7 +297,9 @@ pub fn transfer_unchecked(
           params: vec![Param::Inline(recipient_pubkey.to_bytes().to_vec())],
         })),
       ),
-    });
+    }),
+    false => AccountChange::ReplaceState(to_vec(&recipient_new_balance)?),
+  };
 
   Ok(Transaction::new(
     vec![transfer_intent], //

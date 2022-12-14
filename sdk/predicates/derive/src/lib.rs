@@ -116,5 +116,5 @@ fn decorate_entrypoint_abi(input_fn: &mut ItemFn) {
 
 #[proc_macro]
 pub fn initialize_library(_: TokenStream) -> TokenStream {
-  TokenStream::from(quote! {})
+  TokenStream::from(quote! { extern crate alloc;})
 }
