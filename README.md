@@ -88,7 +88,14 @@ This crate defines basic types used across all types of nodes in the network, su
 
 This crate implements the P2P gossip mechanism used by all nodes that participate in the gossip. More details about this crate are [here](network/README.md).
 
+### Predicates Rust SDK
+
+This crate is a Rust-based SDK for building WASM predicates that validate state on-chain. More details about this crate are [here](sdk/predicates/README.md).
+
+### Standard Predicate Library
+
+This crate implements the Standard Predicates Library; a set of reusable foundational predicates that are shipped with the chain and defined in genesis. More details are [here](stdpred/README.md).
 
 ## Programming model
 
-For an overview of Anoma intent-centric model consult the [whitepaper](https://github.com/anoma/whitepaper/blob/main/whitepaper.pdf).
+For an overview of Anoma intent-centric model consult the [whitepaper](https://github.com/anoma/whitepaper/blob/main/whitepaper.pdf). Take a look also at the SDK and the Standard Predicate Library. Examples can be found in the [sdk examples](sdk/predicates/examples/) directory and in [VM tests](vm/tests/).

@@ -12,7 +12,7 @@ use {
   },
   multihash::{Code, MultihashDigest},
   rayon::prelude::*,
-  rmp_serde::{encode, from_slice, to_vec},
+  rmp_serde::{encode, to_vec},
   std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -20,7 +20,6 @@ use {
   thiserror::Error,
   wasmer::{
     imports,
-    AsStoreRef,
     CompileError,
     Cranelift,
     ExportError,
@@ -301,18 +300,19 @@ fn syscalls(store: &mut Store, memory: &Memory) -> Imports {
 
 #[cfg(debug_assertions)]
 fn debug_log(env: FunctionEnvMut<Memory>, ptr: u32, len: u32) {
+  use wasmer::AsStoreRef;
   let mut buffer = vec![0u8; len as usize];
   env
     .data()
     .view(&env.as_store_ref())
     .read(ptr as u64, &mut buffer)
     .expect("SDK debug log function is not packing the message correctly");
-  let message: String = from_slice(&buffer)
+  let message: String = rmp_serde::from_slice(&buffer)
     .expect("SDK debug log function is not packing the message correctly");
   println!("VM debug log: {message}");
 }
 
 #[cfg(not(debug_assertions))]
-fn debug_log(env: FunctionEnvMut<Memory>, ptr: u32, len: u32) {
+fn debug_log(_: FunctionEnvMut<Memory>, _: u32, _: u32) {
   // noop in non-debug builds
 }

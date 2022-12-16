@@ -12,7 +12,7 @@ members = [
 default-members = ["solver", "validator"]
 
 [profile.release]
-debug = false
+debug = true
 lto = true
 opt-level = 3
 strip = true

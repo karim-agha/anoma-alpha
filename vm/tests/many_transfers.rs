@@ -31,7 +31,7 @@ fn mint_then_transfers() -> anyhow::Result<()> {
   let doner_keypair = Keypair::generate(&mut rand::thread_rng());
   let doner_address = "/token/usdx/rich_guy1.eth".parse()?;
 
-  let population: Vec<_> = (0..500)
+  let population: Vec<_> = (0..1000)
     .into_iter()
     .map(|i| {
       (
@@ -86,7 +86,7 @@ fn mint_then_transfers() -> anyhow::Result<()> {
   let results = anoma_vm::execute_many(&store, &cache, txs.into_iter());
   println!("elapsed: {:?}", started.elapsed());
 
-  assert_eq!(results.len(), 501);
+  assert_eq!(results.len(), 1001);
   for result in results {
     assert!(result.is_ok());
     store.apply(result.unwrap());
@@ -120,7 +120,7 @@ fn many_independent_transfers() -> anyhow::Result<()> {
   ));
 
   let mut diff = StateDiff::default();
-  let population: Vec<_> = (0..1000)
+  let population: Vec<_> = (0..2000)
     .into_iter()
     .map(|i| {
       (
@@ -136,7 +136,7 @@ fn many_independent_transfers() -> anyhow::Result<()> {
   // all those transactions should run in parallel because
   // there are no read/write dependencies between them.
 
-  for (acc, keypair) in population.iter().take(500) {
+  for (acc, keypair) in population.iter().take(1000) {
     diff.set(acc.clone(), Account {
       state: to_vec(&500)?,
       predicates: PredicateTree::Or(
@@ -164,14 +164,14 @@ fn many_independent_transfers() -> anyhow::Result<()> {
   }
   store.apply(diff);
 
-  let mut txs = Vec::with_capacity(500);
-  for i in 0..500 {
+  let mut txs = Vec::with_capacity(1000);
+  for i in 0..1000 {
     txs.push(common::token_ops::transfer(
       250,
       &population[i].0,
       &population[i].1,
-      &population[i + 500].0,
-      &population[i + 500].1.public,
+      &population[i + 1000].0,
+      &population[i + 1000].1.public,
       recent_blockhash,
       &store,
     )?)
@@ -179,8 +179,8 @@ fn many_independent_transfers() -> anyhow::Result<()> {
 
   let started = Instant::now();
   let results = anoma_vm::execute_many(&store, &cache, txs.into_iter());
-  assert_eq!(results.len(), 500);
   println!("elapsed: {:?}", started.elapsed());
+  assert_eq!(results.len(), 1000);
 
   for result in results {
     assert!(result.is_ok());
