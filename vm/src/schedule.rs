@@ -71,7 +71,7 @@ impl<'s> Tree<'s> {
   ) -> impl Iterator<Item = (Result<StateDiff, execution::Error>, usize)> {
     let mut txs = vec![];
     let mut acc_state = StateDiff::default();
-    let mut iter = BfsLevels::new(&self.schedule.graph, self.root);
+    let mut iter = BfsRows::new(&self.schedule.graph, self.root);
     while let Some(row) = iter.next(&self.schedule.graph) {
       // gather all txs belonging to the same deptree row,
       // and remove them from the full depgraph.
@@ -89,16 +89,15 @@ impl<'s> Tree<'s> {
         })
         .collect();
 
-      // always keep track of the transactionoriginal position in the block,
+      // always keep track of the transaction original position in the block,
       // later all execution results will be ordered in the same order as they
       // appear in the block.
       //
       // Run all txs on the same level in parallel:
+      let state = Overlayed::new(state, &acc_state);
       let results: Vec<_> = row_txs
         .into_par_iter()
-        .map(|(tx, ix)| {
-          (execute(tx, &Overlayed::new(state, &acc_state), cache), ix)
-        })
+        .map(|(tx, ix)| (execute(tx, &state, cache), ix))
         .collect();
 
       // accumulate state changes within one tx dependency tree row,
@@ -326,23 +325,23 @@ impl TransactionRefs {
 }
 
 #[derive(Clone)]
-struct BfsLevels<N, VM> {
+struct BfsRows<N, VM> {
   stack: VecDeque<(N, usize)>,
   discovered: VM,
-  level: usize,
+  row: usize,
 }
 
-impl<N, VM: Default> Default for BfsLevels<N, VM> {
+impl<N, VM: Default> Default for BfsRows<N, VM> {
   fn default() -> Self {
     Self {
       stack: VecDeque::new(),
       discovered: VM::default(),
-      level: 0,
+      row: 0,
     }
   }
 }
 
-impl<N, VM> BfsLevels<N, VM>
+impl<N, VM> BfsRows<N, VM>
 where
   N: Copy + PartialEq,
   VM: VisitMap<N>,
@@ -355,10 +354,10 @@ where
     discovered.visit(start);
     let mut stack = VecDeque::new();
     stack.push_front((start, 0));
-    BfsLevels {
+    BfsRows {
       stack,
       discovered,
-      level: 0,
+      row: 0,
     }
   }
 
@@ -366,7 +365,7 @@ where
   where
     G: IntoNeighbors<NodeId = N>,
   {
-    let mut nodes = vec![];
+    let mut row = vec![];
     while let Some((node, level)) = self.stack.pop_front() {
       for succ in graph.neighbors(node) {
         if self.discovered.visit(succ) {
@@ -374,21 +373,22 @@ where
         }
       }
 
-      if level == self.level {
-        nodes.push(node);
+      if level == self.row {
+        row.push(node);
       } else {
         // belongs to a different level, put it back on stack.
-        // Will be picked on next call to this method.
+        // Will be picked up on next call to this method for the
+        // next row.
         self.stack.push_front((node, level));
         break;
       }
     }
 
-    self.level += 1;
+    self.row += 1;
 
-    match nodes.len() {
+    match row.len() {
       0 => return None,
-      _ => Some(nodes),
+      _ => Some(row),
     }
   }
 }
