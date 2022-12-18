@@ -156,7 +156,6 @@ fn parallel_invoke_predicates(
           Err(e) => {
             // on predicate crash, cancel everything
             cancelled.store(true, Ordering::Release);
-            println!("Predicate error: {e:?}, {pred:?}");
             Err(e)
           },
         }

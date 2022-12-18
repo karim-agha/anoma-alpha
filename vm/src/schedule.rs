@@ -350,14 +350,15 @@ where
   where
     G: GraphRef + Visitable<NodeId = N, Map = VM>,
   {
+    let row = 0;
+    let mut stack = VecDeque::new();
     let mut discovered = graph.visit_map();
     discovered.visit(start);
-    let mut stack = VecDeque::new();
-    stack.push_front((start, 0));
+    stack.push_front((start, row));
     BfsRows {
       stack,
       discovered,
-      row: 0,
+      row,
     }
   }
 

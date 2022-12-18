@@ -144,7 +144,7 @@ pub fn accounts_predicates(
   // undetermined as we don't want to make any promises for VM users.
   //
   // Its rare that account predicates reference calldata entries from
-  // predicates, but when they do, its most likely a very specific value
+  // intents, but when they do, its most likely a very specific value
   // identified by things like a public key.
   //
   // If account predicates care about which specific intent has a given
