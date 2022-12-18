@@ -13,7 +13,14 @@ use {
     prelude::DiGraph,
     stable_graph::NodeIndex,
     unionfind::UnionFind,
-    visit::{Bfs, EdgeRef, NodeIndexable},
+    visit::{
+      EdgeRef,
+      GraphRef,
+      IntoNeighbors,
+      NodeIndexable,
+      VisitMap,
+      Visitable,
+    },
     Direction,
   },
   rayon::prelude::*,
@@ -64,29 +71,46 @@ impl<'s> Tree<'s> {
   ) -> impl Iterator<Item = (Result<StateDiff, execution::Error>, usize)> {
     let mut txs = vec![];
     let mut acc_state = StateDiff::default();
-    let mut iter = Bfs::new(&self.schedule.graph, self.root);
-    while let Some(ix) = iter.next(&self.schedule.graph) {
-      let mut tx = self
-        .schedule
-        .graph
-        .node_weight(ix)
-        .expect("retreived through traversal")
-        .borrow_mut();
+    let mut iter = BfsLevels::new(&self.schedule.graph, self.root);
+    while let Some(row) = iter.next(&self.schedule.graph) {
+      // gather all txs belonging to the same deptree row,
+      // and remove them from the full depgraph.
+      let row_txs: Vec<_> = row
+        .into_iter()
+        .map(|tx| {
+          self
+            .schedule
+            .graph
+            .node_weight(tx)
+            .expect("retreived through traversal")
+            .borrow_mut()
+            .take()
+            .expect("transaction visited more than once")
+        })
+        .collect();
 
-      // always keep track of the transaction position in the block, so that
-      // later all execution results are ordered in the same order as they
+      // always keep track of the transactionoriginal position in the block,
+      // later all execution results will be ordered in the same order as they
       // appear in the block.
-      let (tx, ix) = tx.take().expect("transaction visited more than once");
-      let exec_result = execute(tx, &Overlayed::new(state, &acc_state), cache);
+      //
+      // Run all txs on the same level in parallel:
+      let results: Vec<_> = row_txs
+        .into_par_iter()
+        .map(|(tx, ix)| {
+          (execute(tx, &Overlayed::new(state, &acc_state), cache), ix)
+        })
+        .collect();
 
-      // accumulate state changes within one tx dependency path,
-      // the next tx in this dependency path needs to see mutations
-      // resulting from previous tx.
-      if let Ok(ref diff) = exec_result {
-        acc_state.apply(diff.clone());
+      // accumulate state changes within one tx dependency tree row,
+      // the next row of this dependency tree needs to see mutations
+      // resulting from previous txs.
+      for (result, ix) in results {
+        if let Ok(ref diff) = result {
+          acc_state.apply(diff.clone());
+        }
+
+        txs.push((result, ix));
       }
-
-      txs.push((exec_result, ix));
     }
 
     txs.into_iter()
@@ -298,5 +322,73 @@ impl TransactionRefs {
     }
 
     Self { reads, writes }
+  }
+}
+
+#[derive(Clone)]
+struct BfsLevels<N, VM> {
+  stack: VecDeque<(N, usize)>,
+  discovered: VM,
+  level: usize,
+}
+
+impl<N, VM: Default> Default for BfsLevels<N, VM> {
+  fn default() -> Self {
+    Self {
+      stack: VecDeque::new(),
+      discovered: VM::default(),
+      level: 0,
+    }
+  }
+}
+
+impl<N, VM> BfsLevels<N, VM>
+where
+  N: Copy + PartialEq,
+  VM: VisitMap<N>,
+{
+  pub fn new<G>(graph: G, start: N) -> Self
+  where
+    G: GraphRef + Visitable<NodeId = N, Map = VM>,
+  {
+    let mut discovered = graph.visit_map();
+    discovered.visit(start);
+    let mut stack = VecDeque::new();
+    stack.push_front((start, 0));
+    BfsLevels {
+      stack,
+      discovered,
+      level: 0,
+    }
+  }
+
+  pub fn next<G>(&mut self, graph: G) -> Option<Vec<N>>
+  where
+    G: IntoNeighbors<NodeId = N>,
+  {
+    let mut nodes = vec![];
+    while let Some((node, level)) = self.stack.pop_front() {
+      for succ in graph.neighbors(node) {
+        if self.discovered.visit(succ) {
+          self.stack.push_back((succ, level + 1));
+        }
+      }
+
+      if level == self.level {
+        nodes.push(node);
+      } else {
+        // belongs to a different level, put it back on stack.
+        // Will be picked on next call to this method.
+        self.stack.push_front((node, level));
+        break;
+      }
+    }
+
+    self.level += 1;
+
+    match nodes.len() {
+      0 => return None,
+      _ => Some(nodes),
+    }
   }
 }
