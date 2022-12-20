@@ -96,6 +96,10 @@ This crate is a Rust-based SDK for building WASM predicates that validate state 
 
 This crate implements the Standard Predicates Library; a set of reusable foundational predicates that are shipped with the chain and defined in genesis. More details are [here](stdpred/README.md).
 
+### Anoma Virtual Machine
+
+This crate implements the virtual machine; responsible for executing WASM compiled predicates. More details are [here](vm/README.md).
+
 ## Programming model
 
 For an overview of Anoma intent-centric model consult the [whitepaper](https://github.com/anoma/whitepaper/blob/main/whitepaper.pdf). Take a look also at the SDK and the Standard Predicate Library. Examples can be found in the [sdk examples](sdk/predicates/examples/) directory and in [VM tests](vm/tests/).

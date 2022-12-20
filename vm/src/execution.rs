@@ -178,7 +178,7 @@ fn invoke(
     "/predcache/{}",
     bs58::encode(codehash.to_bytes()).into_string()
   ))
-  .expect("format validate at compile time");
+  .expect("format validated at compile time");
   let module = match cache.get(&cachekey) {
     Some(val) => match unsafe { Module::deserialize(&store, val.state) } {
       Ok(module) => module,
