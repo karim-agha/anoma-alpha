@@ -1,13 +1,16 @@
 use {
   crate::{mempool::Mempool, settings::SystemSettings},
   anoma_network::{topic, topic::Topic, Config, Network},
+  anoma_primitives::{Account, Code, Predicate, PredicateTree},
   anoma_vm::{InMemoryStateStore, State, StateDiff},
   clap::Parser,
   futures::StreamExt,
+  multihash::MultihashDigest,
   rmp_serde::{from_slice, to_vec},
   tokio::time::{interval, MissedTickBehavior},
   tracing::{info, subscriber::set_global_default},
   tracing_subscriber::FmtSubscriber,
+  wasmer::{Cranelift, Module, Store},
 };
 
 mod block;
@@ -39,8 +42,39 @@ fn start_network(settings: &SystemSettings) -> anyhow::Result<(Topic, Topic)> {
   Ok((txs_topic, blocks_topic))
 }
 
-fn precompile_predicates(_diff: &StateDiff) -> StateDiff {
-  StateDiff::default()
+fn precompile_predicates(diff: &StateDiff) -> StateDiff {
+  let wasm_sig = b"\0asm";
+  let mut output = StateDiff::default();
+  for (_, change) in diff.iter() {
+    if let Some(change) = change {
+      if change.state.starts_with(wasm_sig) {
+        let compiler = Cranelift::default();
+        let store = Store::new(compiler);
+        if let Ok(compiled) = Module::from_binary(&store, &change.state) {
+          let codehash = multihash::Code::Sha3_256.digest(&change.state);
+          let serialized = compiled
+            .serialize()
+            .expect("compiled wasm serialization failed");
+          output.set(
+            format!(
+              "/predcache/{}",
+              bs58::encode(codehash.to_bytes()).into_string()
+            )
+            .parse()
+            .expect("validated at compile time"),
+            Account {
+              state: serialized.to_vec(),
+              predicates: PredicateTree::Id(Predicate {
+                code: Code::Inline(vec![]),
+                params: vec![],
+              }),
+            },
+          );
+        }
+      }
+    }
+  }
+  output
 }
 
 #[tokio::main]

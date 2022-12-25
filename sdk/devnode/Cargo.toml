@@ -9,8 +9,10 @@ anoma-vm = { path = "../../vm" }
 anoma-network = { path = "../../network" }
 anoma-primitives = { path = "../../primitives" }
 
+bs58 = "0.4"
 anyhow = "1.0"
 humantime = "2.1"
+wasmer = { version = "3.1", features = ["cranelift"] }
 axum = { version = "0.6", features = ["ws"] }
 tokio = { version = "1.23", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
