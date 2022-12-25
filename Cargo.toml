@@ -8,6 +8,8 @@ members = [
   "stdpred",
   "sdk/predicates",
   "sdk/predicates/derive",
+  "sdk/solver",
+  "sdk/devnode"
 ]
 default-members = ["solver", "validator"]
 

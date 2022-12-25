@@ -1,0 +1,9 @@
+[package]
+name = "solver"
+version = "0.1.0"
+edition = "2021"
+description = "Anoma Solver SDK"
+
+[dependencies]
+anoma-network = { path = "../../network" }
+anoma-primitives = { path = "../../primitives" }

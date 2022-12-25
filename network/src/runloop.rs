@@ -161,8 +161,11 @@ fn start_network_runloop(
             // any high-level logic except routing commands and
             // events between network foreground and background
             // threads.
-            netcmdtx.send(network::Command::InjectEvent(event))
-              .expect("network should outlive runloop");
+            if let Err(e) = netcmdtx.send(network::Command::InjectEvent(event)) {
+              error!("Terminating network thread: {e:?}. No further data will be \
+                      sent or received over p2p.");
+              break;
+            }
           }
         }
 

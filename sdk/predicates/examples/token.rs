@@ -66,7 +66,7 @@
 //! The spending authorization logic of the balance accounts could varry
 //! between different accounts, some might want to have a multisig, others
 //! may chose to use a single pubkey, or a password. For that purpose the
-//! validity predicates on the token account will not be implemented as part
+//! validity predicates on the balance account will not be implemented as part
 //! of the token VPs, instead they will be constructed on a case by case
 //! basis when new accounts are created and assembled from predicates from
 //! the standard predicate library.
@@ -77,7 +77,7 @@
 //! specific constructor params. The /token account VP will only ensure
 //! that the contents of the /token account is immutable by giving it
 //! a predicate from the standard predicate library that always returns
-//! true if the modified account is equal to "/token".
+//! false if the modified account is equal to "/token".
 //!
 //! All state in accounts in serialized using MessagePack format.
 

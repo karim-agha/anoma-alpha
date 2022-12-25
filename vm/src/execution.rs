@@ -86,8 +86,8 @@ pub enum Error {
 /// state if all predicates evaluate to true.
 pub fn execute(
   tx: Transaction,
-  state: &impl State,
-  cache: &impl State,
+  state: &dyn State,
+  cache: &dyn State,
 ) -> Result<StateDiff, Error> {
   // those changes will be applied if all predicates
   // evaluate to true in intents and mutated accounts.
@@ -133,7 +133,7 @@ pub fn execute(
 fn parallel_invoke_predicates(
   context: &PredicateContext,
   predicates: impl ParallelIterator<Item = PredicateTree<Expanded>>,
-  cache: &impl State,
+  cache: &dyn State,
 ) -> Result<(), Error> {
   let context = to_vec(&context)?;
   let cancelled = Arc::new(AtomicBool::new(false));
@@ -168,7 +168,7 @@ fn parallel_invoke_predicates(
 fn invoke(
   context: &[u8],
   predicate: &Predicate<Expanded>,
-  cache: &impl State,
+  cache: &dyn State,
 ) -> Result<bool, Error> {
   let compiler = Cranelift::default();
   let mut store = Store::new(compiler);

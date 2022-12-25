@@ -14,6 +14,6 @@ pub mod topic;
 
 pub use {
   config::Config,
-  libp2p::core::identity::Keypair,
+  libp2p::{core::identity::Keypair, multiaddr},
   network::{Error, Network},
 };

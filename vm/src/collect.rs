@@ -57,7 +57,7 @@ pub enum Error {
 /// diff that will be applied to the replicated blockchain
 /// global state.
 pub fn outputs(
-  state: &impl State,
+  state: &dyn State,
   transaction: &Transaction,
 ) -> Result<StateDiff, Error> {
   let mut output = StateDiff::default();
@@ -106,7 +106,7 @@ pub fn outputs(
 /// Prepares the transaction context that is passed as an
 /// argument to every predicate triggered by a transaction.
 pub fn predicate_context(
-  state: &impl State,
+  state: &dyn State,
   transaction: &Transaction,
 ) -> Result<PredicateContext, Error> {
   Ok(PredicateContext {
@@ -131,7 +131,7 @@ pub fn predicate_context(
 /// Retreives a list of all account predicates that need to be invoked
 /// for each transaction proposal, along with account's ancestors predicates.
 pub fn accounts_predicates(
-  state: &impl State,
+  state: &dyn State,
   context: &PredicateContext,
   transaction: &Transaction,
 ) -> Result<Vec<PredicateTree<Expanded>>, Error> {
@@ -187,7 +187,7 @@ pub fn accounts_predicates(
 }
 
 pub fn intents_predicates(
-  state: &impl State,
+  state: &dyn State,
   context: &PredicateContext,
   tx: Transaction,
 ) -> Result<Vec<PredicateTree<Expanded>>, Error> {
@@ -208,7 +208,7 @@ pub fn intents_predicates(
 /// resolved and embedded in the expanded representation of
 /// predicate tree.
 fn expand_predicate_tree(
-  state: &impl State,
+  state: &dyn State,
   tree: PredicateTree,
   context: &PredicateContext,
   calldata: &Calldata,
@@ -265,7 +265,7 @@ fn expand_predicate_tree(
 /// future version of the account being mutated.
 fn expand_account_change(
   addr: Address,
-  state: &impl State,
+  state: &dyn State,
   change: &AccountChange,
 ) -> Result<ExpandedAccountChange, Error> {
   Ok(match change {

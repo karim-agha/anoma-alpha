@@ -1,0 +1,25 @@
+[package]
+name = "anoma-devnode"
+version = "0.1.0"
+edition = "2021"
+description = "Anoma Local Devnode"
+
+[dependencies]
+anoma-vm = { path = "../../vm" }
+anoma-network = { path = "../../network" }
+anoma-primitives = { path = "../../primitives" }
+
+anyhow = "1.0"
+humantime = "2.1"
+axum = { version = "0.6", features = ["ws"] }
+tokio = { version = "1.23", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+clap = { version = "4.0", features = ["derive"] }
+cid = { version = "0.10", features = ["serde-codec"] }
+multihash = { version = "0.17", features = ["serde-codec"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sled = "0.34"
+dashmap = "5.4"
+rmp-serde = "1.1"
+futures = "0.3"

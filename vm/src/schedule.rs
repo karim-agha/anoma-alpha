@@ -35,8 +35,8 @@ use {
 /// transaction execution or an error explaining why a tx failed. The resulting
 /// collection of results is in the same order as the input txs.
 pub fn execute_many(
-  state: &impl State,
-  cache: &impl State,
+  state: &dyn State,
+  cache: &dyn State,
   txs: impl Iterator<Item = Transaction>,
 ) -> Vec<Result<StateDiff, execution::Error>> {
   Schedule::new(state, txs).run(state, cache).collect()
@@ -66,8 +66,8 @@ impl<'s> std::fmt::Debug for Tree<'s> {
 impl<'s> Tree<'s> {
   pub fn run(
     self,
-    state: &impl State,
-    cache: &impl State,
+    state: &dyn State,
+    cache: &dyn State,
   ) -> impl Iterator<Item = (Result<StateDiff, execution::Error>, usize)> {
     let mut txs = vec![];
     let mut acc_state = StateDiff::default();
@@ -118,7 +118,7 @@ impl<'s> Tree<'s> {
 
 impl Schedule {
   pub fn new(
-    state: &impl State,
+    state: &dyn State,
     txs: impl Iterator<Item = Transaction>,
   ) -> Self {
     let mut graph = DiGraph::new();
@@ -150,8 +150,8 @@ impl Schedule {
 
   pub fn run(
     self,
-    state: &impl State,
-    cache: &impl State,
+    state: &dyn State,
+    cache: &dyn State,
   ) -> impl Iterator<Item = Result<StateDiff, execution::Error>> {
     let mut trees: Vec<(Result<StateDiff, execution::Error>, usize)> = self
       .trees()
@@ -241,7 +241,7 @@ impl TransactionRefs {
       || self.writes.iter().any(|addr| other.writes.contains(addr))
   }
 
-  pub fn new(tx: &Transaction, state: &impl State) -> Self {
+  pub fn new(tx: &Transaction, state: &dyn State) -> Self {
     let mut reads = HashSet::new();
     let mut writes = HashSet::new();
 
