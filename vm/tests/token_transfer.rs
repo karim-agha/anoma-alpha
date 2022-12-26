@@ -23,7 +23,7 @@ fn transfer_token() -> anyhow::Result<()> {
   ));
   cache.apply(precache_predicates_bytecode(
     &store,
-    &"/predicates/std".parse().unwrap(),
+    &"/stdpred/v1".parse().unwrap(),
   ));
 
   let alice_keypair = Keypair::generate(&mut rand::thread_rng());

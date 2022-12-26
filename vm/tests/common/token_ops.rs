@@ -50,7 +50,7 @@ pub fn mint(
     PredicateTree::<Exact>::And(
       Box::new(PredicateTree::Id(Predicate {
         // expect that the total supply is updated by the mint amount
-        code: Code::AccountRef("/predicates/std".parse()?, "uint_equal".into()),
+        code: Code::AccountRef("/stdpred/v1".parse()?, "uint_equal".into()),
         params: vec![
           Param::ProposalRef("/token/usdx".parse()?),
           Param::Inline(to_vec(&new_supply)?),
@@ -58,7 +58,7 @@ pub fn mint(
       })),
       Box::new(PredicateTree::Id(Predicate {
         // expect that the minted amount is credited to a wallet
-        code: Code::AccountRef("/predicates/std".parse()?, "uint_equal".into()),
+        code: Code::AccountRef("/stdpred/v1".parse()?, "uint_equal".into()),
         params: vec![
           Param::ProposalRef(recipient.clone()),
           Param::Inline(to_vec(&new_balance)?),
@@ -79,7 +79,7 @@ pub fn mint(
           // otherwise its happy to receive tokens
           // without any authorization.
           code: Code::AccountRef(
-            "/predicates/std".parse()?,
+            "/stdpred/v1".parse()?,
             "uint_greater_than_equal".into(),
           ),
           params: vec![
@@ -91,7 +91,7 @@ pub fn mint(
           // If proposed balance is not greater that current balance
           // then require a signature to authorize spending
           code: Code::AccountRef(
-            "/predicates/std".parse()?,
+            "/stdpred/v1".parse()?,
             "require_ed25519_signature".into(),
           ),
           params: vec![Param::Inline(recipient_pubkey.to_bytes().to_vec())],
@@ -147,7 +147,7 @@ pub fn transfer(
     PredicateTree::<Exact>::And(
       Box::new(PredicateTree::Id(Predicate {
         code: Code::AccountRef(
-          "/predicates/std".parse()?,
+          "/stdpred/v1".parse()?,
           "uint_less_than_by".into(),
         ),
         params: vec![
@@ -158,7 +158,7 @@ pub fn transfer(
       })),
       Box::new(PredicateTree::Id(Predicate {
         code: Code::AccountRef(
-          "/predicates/std".parse()?,
+          "/stdpred/v1".parse()?,
           "uint_greater_than_equal".into(),
         ),
         params: vec![
@@ -202,7 +202,7 @@ pub fn transfer(
       predicates: PredicateTree::Or(
         Box::new(PredicateTree::Id(Predicate {
           code: Code::AccountRef(
-            "/predicates/std".parse()?,
+            "/stdpred/v1".parse()?,
             "uint_greater_than_equal".into(),
           ),
           params: vec![
@@ -214,7 +214,7 @@ pub fn transfer(
           // If proposed balance is not greater that current balance
           // then require a signature to authorize spending
           code: Code::AccountRef(
-            "/predicates/std".parse()?,
+            "/stdpred/v1".parse()?,
             "require_ed25519_signature".into(),
           ),
           params: vec![Param::Inline(recipient_pubkey.to_bytes().to_vec())],
@@ -248,14 +248,14 @@ pub fn transfer_unchecked(
     recent_blockhash,
     PredicateTree::<Exact>::And(
       Box::new(PredicateTree::Id(Predicate {
-        code: Code::AccountRef("/predicates/std".parse()?, "uint_equal".into()),
+        code: Code::AccountRef("/stdpred/v1".parse()?, "uint_equal".into()),
         params: vec![
           Param::ProposalRef(sender.clone()),
           Param::Inline(to_vec(&sender_new_balance)?),
         ],
       })),
       Box::new(PredicateTree::Id(Predicate {
-        code: Code::AccountRef("/predicates/std".parse()?, "uint_equal".into()),
+        code: Code::AccountRef("/stdpred/v1".parse()?, "uint_equal".into()),
         params: vec![
           Param::ProposalRef(recipient.clone()),
           Param::Inline(to_vec(&recipient_new_balance)?),
@@ -281,7 +281,7 @@ pub fn transfer_unchecked(
       predicates: PredicateTree::Or(
         Box::new(PredicateTree::Id(Predicate {
           code: Code::AccountRef(
-            "/predicates/std".parse()?,
+            "/stdpred/v1".parse()?,
             "uint_greater_than_equal".into(),
           ),
           params: vec![
@@ -293,7 +293,7 @@ pub fn transfer_unchecked(
           // If proposed balance is not greater that current balance
           // then require a signature to authorize spending
           code: Code::AccountRef(
-            "/predicates/std".parse()?,
+            "/stdpred/v1".parse()?,
             "require_ed25519_signature".into(),
           ),
           params: vec![Param::Inline(recipient_pubkey.to_bytes().to_vec())],

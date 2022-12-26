@@ -1,8 +1,13 @@
 use {
   crate::{mempool::Mempool, settings::SystemSettings},
-  anoma_network::{topic, topic::Topic, Config, Network},
-  anoma_primitives::{Account, Code, Predicate, PredicateTree},
-  anoma_vm::{InMemoryStateStore, State, StateDiff},
+  anoma_network::{
+    topic::{self, Topic},
+    Config,
+    Keypair,
+    Network,
+  },
+  anoma_primitives::{Account, Code, Param, Predicate, PredicateTree},
+  anoma_vm::StateDiff,
   clap::Parser,
   futures::StreamExt,
   multihash::MultihashDigest,
@@ -25,7 +30,7 @@ fn start_network(settings: &SystemSettings) -> anyhow::Result<(Topic, Topic)> {
       listen_addrs: settings.p2p_addrs(),
       ..Default::default()
     },
-    anoma_network::Keypair::generate_ed25519(),
+    Keypair::generate_ed25519(),
   )?;
 
   let txs_topic = network.join(topic::Config {
@@ -42,7 +47,7 @@ fn start_network(settings: &SystemSettings) -> anyhow::Result<(Topic, Topic)> {
   Ok((txs_topic, blocks_topic))
 }
 
-fn precompile_predicates(diff: &StateDiff) -> StateDiff {
+fn precompile_predicates(diff: &StateDiff) -> anyhow::Result<StateDiff> {
   let wasm_sig = b"\0asm";
   let mut output = StateDiff::default();
   for (_, change) in diff.iter() {
@@ -52,16 +57,13 @@ fn precompile_predicates(diff: &StateDiff) -> StateDiff {
         let store = Store::new(compiler);
         if let Ok(compiled) = Module::from_binary(&store, &change.state) {
           let codehash = multihash::Code::Sha3_256.digest(&change.state);
-          let serialized = compiled
-            .serialize()
-            .expect("compiled wasm serialization failed");
+          let serialized = compiled.serialize()?;
           output.set(
             format!(
               "/predcache/{}",
               bs58::encode(codehash.to_bytes()).into_string()
             )
-            .parse()
-            .expect("validated at compile time"),
+            .parse()?,
             Account {
               state: serialized.to_vec(),
               predicates: PredicateTree::Id(Predicate {
@@ -74,7 +76,27 @@ fn precompile_predicates(diff: &StateDiff) -> StateDiff {
       }
     }
   }
-  output
+  Ok(output)
+}
+
+fn persist_block(height: u64, blockdata: &[u8]) -> anyhow::Result<StateDiff> {
+  let mut output = StateDiff::default();
+  output.set("/block_num".parse()?, Account {
+    state: to_vec(&height)?,
+    predicates: PredicateTree::Id(Predicate {
+      code: Code::AccountRef("/stdpred/v1".parse()?, "constant".into()),
+      params: vec![Param::Inline(to_vec(&false)?)],
+    }),
+  });
+
+  output.set(format!("/block/{height}").parse()?, Account {
+    state: blockdata.to_vec(),
+    predicates: PredicateTree::Id(Predicate {
+      code: Code::AccountRef("/stdpred/v1".parse()?, "constant".into()),
+      params: vec![Param::Inline(to_vec(&false)?)],
+    }),
+  });
+  Ok(output)
 }
 
 #[tokio::main]
@@ -86,13 +108,12 @@ async fn main() -> anyhow::Result<()> {
   let settings = SystemSettings::parse();
   info!("startup settings: {settings:#?}");
 
-  // get an instance of state store, it can be either
+  // get instances of stores, it can be either
   // an in-memory ephemeral storage if no data directory
   // is provided by cli or persistent on-disk store otherwise.
-  let mut state_store = settings.storage()?;
-
-  // stores precompiled predicates
-  let mut code_cache = InMemoryStateStore::default();
+  let mut code_cache = settings.cache_storage()?;
+  let mut state_store = settings.state_storage()?;
+  let mut blocks_store = settings.blocks_storage()?;
 
   // start network and get topic handles for txs and blocks
   let (mut txs_topic, blocks_topic) = start_network(&settings)?;
@@ -100,6 +121,12 @@ async fn main() -> anyhow::Result<()> {
   let mut mempool = Mempool::default();
   let mut interval = interval(settings.block_time());
   interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+  // get last known block #:
+  let mut height: u64 = blocks_store
+    .get(&"/block_num".parse()?)
+    .map(|a| from_slice(&a.state).expect("corrupt db"))
+    .unwrap_or_default();
 
   loop {
     tokio::select! {
@@ -109,12 +136,20 @@ async fn main() -> anyhow::Result<()> {
         }
       }
       _ = interval.tick() => {
-        let (block, statediff) = mempool.produce(&*state_store, &code_cache);
-        info!("produced block with {} transactions and {} account mutations",
+        height += 1;
+        let (block, statediff) = mempool.produce(&*state_store, &*code_cache);
+        info!("produced block #{height} with {} transactions and {} account mutations",
           block.transactions.len(), statediff.iter().count());
-        code_cache.apply(precompile_predicates(&statediff));
+
+        // serialize block bytes
+        let block = to_vec(&block)?;
+
+        code_cache.apply(precompile_predicates(&statediff)?);
         state_store.apply(statediff);
-        blocks_topic.gossip(to_vec(&block)?);
+        blocks_store.apply(persist_block(height, &block)?);
+
+        // broadcast through p2p to all other nodes
+        blocks_topic.gossip(block);
       }
     }
   }

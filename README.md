@@ -1,6 +1,6 @@
 # Anoma Blockchain Alpha Version
 
-This prototype aims to reproduce the following topology:
+This milestone aims to reproduce the following topology:
 
 ```
  ┌────────┐                     ┌───────────┐   │   ┌───────┐

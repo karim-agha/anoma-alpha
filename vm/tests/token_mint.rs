@@ -23,7 +23,7 @@ fn mint_tokens() -> anyhow::Result<()> {
   ));
   cache.apply(precache_predicates_bytecode(
     &store,
-    &"/predicates/std".parse().unwrap(),
+    &"/stdpred/v1".parse().unwrap(),
   ));
 
   let wallet1keypair = Keypair::generate(&mut rand::thread_rng());
@@ -69,7 +69,7 @@ fn mint_tokens() -> anyhow::Result<()> {
     PredicateTree::Or(
       Box::new(PredicateTree::Id(Predicate {
         code: Code::AccountRef(
-          "/predicates/std".parse()?,
+          "/stdpred/v1".parse()?,
           "uint_greater_than_equal".into(),
         ),
         params: vec![
@@ -79,7 +79,7 @@ fn mint_tokens() -> anyhow::Result<()> {
       })),
       Box::new(PredicateTree::Id(Predicate {
         code: Code::AccountRef(
-          "/predicates/std".parse()?,
+          "/stdpred/v1".parse()?,
           "require_ed25519_signature".into(),
         ),
         params: vec![Param::Inline(wallet1keypair.public.to_bytes().to_vec(),)],
@@ -103,7 +103,7 @@ fn mint_tokens() -> anyhow::Result<()> {
       })),
       Box::new(PredicateTree::Id(Predicate {
         code: Code::AccountRef(
-          "/predicates/std".parse().unwrap(),
+          "/stdpred/v1".parse().unwrap(),
           "immutable_predicates".into(),
         ),
         params: vec![Param::Inline(to_vec(&tokenaddr).unwrap())],

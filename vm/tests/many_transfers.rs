@@ -25,7 +25,7 @@ fn mint_then_transfers() -> anyhow::Result<()> {
   ));
   cache.apply(precache_predicates_bytecode(
     &store,
-    &"/predicates/std".parse().unwrap(),
+    &"/stdpred/v1".parse().unwrap(),
   ));
 
   let doner_keypair = Keypair::generate(&mut rand::thread_rng());
@@ -116,7 +116,7 @@ fn many_independent_transfers() -> anyhow::Result<()> {
   ));
   cache.apply(precache_predicates_bytecode(
     &store,
-    &"/predicates/std".parse().unwrap(),
+    &"/stdpred/v1".parse().unwrap(),
   ));
 
   let mut diff = StateDiff::default();
@@ -142,7 +142,7 @@ fn many_independent_transfers() -> anyhow::Result<()> {
       predicates: PredicateTree::Or(
         Box::new(PredicateTree::Id(Predicate {
           code: Code::AccountRef(
-            "/predicates/std".parse()?,
+            "/stdpred/v1".parse()?,
             "uint_greater_than_equal".into(),
           ),
           params: vec![
@@ -154,7 +154,7 @@ fn many_independent_transfers() -> anyhow::Result<()> {
           // If proposed balance is not greater that current balance
           // then require a signature to authorize spending
           code: Code::AccountRef(
-            "/predicates/std".parse()?,
+            "/stdpred/v1".parse()?,
             "require_ed25519_signature".into(),
           ),
           params: vec![Param::Inline(keypair.public.to_bytes().to_vec())],

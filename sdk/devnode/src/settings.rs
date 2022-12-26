@@ -79,9 +79,23 @@ impl SystemSettings {
       .collect()
   }
 
-  pub fn storage(&self) -> anyhow::Result<Box<dyn State>> {
+  pub fn state_storage(&self) -> anyhow::Result<Box<dyn State>> {
     Ok(match &self.data_dir {
-        Some(path) => Box::new(OnDiskStateStore::new(path)?),
+        Some(path) => Box::new(OnDiskStateStore::new(path, "state")?),
+        None => Box::new(InMemoryStateStore::default()),
+    })
+  }
+
+  pub fn blocks_storage(&self) -> anyhow::Result<Box<dyn State>> {
+    Ok(match &self.data_dir {
+        Some(path) => Box::new(OnDiskStateStore::new(path, "blocks")?),
+        None => Box::new(InMemoryStateStore::default()),
+    })
+  }
+
+  pub fn cache_storage(&self) -> anyhow::Result<Box<dyn State>> {
+    Ok(match &self.data_dir {
+        Some(path) => Box::new(OnDiskStateStore::new(path, "cache")?),
         None => Box::new(InMemoryStateStore::default()),
     })
   }

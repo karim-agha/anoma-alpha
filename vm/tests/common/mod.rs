@@ -13,7 +13,7 @@ use {
 };
 
 /// Creates a statediff that has the standard predicates library
-/// installed in sate at '/predicates/std'. Almost everything
+/// installed in sate at '/stdpred/v1'. Almost everything
 /// will require this.
 ///
 /// This function could fail if the wasm binary is not present
@@ -28,7 +28,7 @@ use {
 /// ```
 /// Then a WASM binary will be produced under this address
 pub fn install_standard_library() -> StateDiff {
-  let stdaddr: Address = "/predicates/std".parse().unwrap();
+  let stdaddr: Address = "/stdpred/v1".parse().unwrap();
   let mut stdpred_bytecode = StateDiff::default();
   stdpred_bytecode.set(stdaddr.clone(), Account {
     state: include_bytes!(
@@ -67,7 +67,7 @@ pub fn install_standard_library() -> StateDiff {
 ///     --release
 /// ```
 pub fn install_token_bytecode() -> StateDiff {
-  let stdaddr: Address = "/predicates/std".parse().unwrap();
+  let stdaddr: Address = "/stdpred/v1".parse().unwrap();
   let tokenaddr: Address = "/token".parse().unwrap();
   let mut token_bytecode = StateDiff::default();
   token_bytecode.set("/token".parse().unwrap(), Account {
@@ -114,10 +114,10 @@ pub fn create_usdx_token(mint_authority: PublicKey) -> StateDiff {
       })),
       Box::new(PredicateTree::Id(Predicate {
         code: Code::AccountRef(
-          "/predicates/std".parse().unwrap(),
-          "immutable_predicates".into(),
+          "/stdpred/v1".parse().unwrap(),
+          "constant".into(),
         ),
-        params: vec![Param::Inline(to_vec(&tokenaddr).unwrap())],
+        params: vec![Param::Inline(to_vec(&false).unwrap())],
       })),
     ),
   });
