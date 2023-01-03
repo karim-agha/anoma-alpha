@@ -2,16 +2,14 @@
 members = [
   "network",
   "primitives",
-  "solver",
-  "validator",
   "vm",
   "stdpred",
+  "sdk/client",
   "sdk/predicates",
   "sdk/predicates/derive",
   "sdk/solver",
-  "sdk/devnode"
+  "sdk/devnode",
 ]
-default-members = ["solver", "validator"]
 
 [profile.release]
 debug = true

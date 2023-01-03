@@ -1,0 +1,17 @@
+version: "3"
+
+networks:
+  example_pgqf_net:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.1.0/24
+
+services:
+  validator:
+    build:
+      context: ../../
+      dockerfile: ./sdk/examples/pgqf.dockerfile
+    networks:
+      example_pgqf_net:
+        ipv4_address: 172.20.1.2

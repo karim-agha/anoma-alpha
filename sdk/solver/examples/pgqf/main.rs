@@ -1,25 +1,21 @@
+mod cli;
+
 use {
   crate::cli::CliOptions,
   anoma_network as network,
   clap::Parser,
   futures::StreamExt,
-  metrics_exporter_prometheus::PrometheusBuilder,
   network::Network,
+  std::time::Duration,
   tracing::info,
-  tracing_subscriber::FmtSubscriber,
 };
-
-mod cli;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-  tracing::subscriber::set_global_default(FmtSubscriber::new())?;
-  PrometheusBuilder::new()
-    .install()
-    .expect("failed to install metrics exporter");
+  tracing_subscriber::fmt::init();
 
   let opts = CliOptions::parse();
-  info!("Validator options: {opts:?}");
+  info!("Solver options: {opts:?}");
 
   let mut network = Network::default();
 
@@ -32,7 +28,17 @@ async fn main() -> anyhow::Result<()> {
     bootstrap: opts.peers(),
   })?;
 
-  // intents_topic.gossip(vec![1u8, 2, 3].into());
+  tokio::spawn({
+    let intents = intents_topic.clone();
+
+    async move {
+      loop {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let bytes = [1u8, 2, 3]; // test deduplication
+        intents.gossip(bytes.to_vec().into());
+      }
+    }
+  });
 
   tokio::spawn(async move {
     let mut intents_topic = intents_topic;
@@ -50,7 +56,18 @@ async fn main() -> anyhow::Result<()> {
     bootstrap: opts.peers(),
   })?;
 
-  // transactions_topic.gossip(vec![4u8, 5, 6].into());
+  tokio::spawn({
+    let transactions = transactions_topic.clone();
+
+    async move {
+      let mut counter = 1u64;
+      loop {
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        transactions.gossip(counter.to_be_bytes().to_vec().into());
+        counter += 1;
+      }
+    }
+  });
 
   tokio::spawn(async move {
     let mut transactions_topic = transactions_topic;
@@ -59,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
     }
   });
 
-  // run the network runloop in the background forever.
+  // run the network runloop in the background.
   tokio::spawn(network.runloop()).await?;
   Ok(())
 }

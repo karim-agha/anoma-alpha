@@ -65,8 +65,7 @@ impl<R: Repr> Transaction<R> {
   pub fn hash(&self) -> &Multihash {
     self.hash_cache.get_or_init(|| {
       let mut hasher = Sha3_256::default();
-      hasher.update(&rmp_serde::to_vec(&self.intents).unwrap());
-      hasher.update(&rmp_serde::to_vec(&self.proposals).unwrap());
+      hasher.update(&rmp_serde::to_vec(self).unwrap());
       multihash::Code::Sha3_256.wrap(hasher.finalize()).unwrap()
     })
   }

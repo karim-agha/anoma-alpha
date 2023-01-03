@@ -1,0 +1,9 @@
+[package]
+name = "anoma-client-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Anoma Client Rust SDK"
+
+[[example]]
+name = "pgqf-client"
+path = "examples/pgqf.rs"

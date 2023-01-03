@@ -1,6 +1,6 @@
 use {
+  anoma_network::multiaddr::{Multiaddr, Protocol},
   clap::Parser,
-  multiaddr::{Multiaddr, Protocol},
   std::{collections::HashSet, net::SocketAddr},
 };
 
@@ -17,9 +17,6 @@ pub struct CliOptions {
 
   #[clap(long, short)]
   genesis: String,
-
-  #[clap(long, short)]
-  rpc: Option<String>,
 }
 
 impl CliOptions {

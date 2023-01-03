@@ -1,5 +1,5 @@
 [package]
-name = "solver"
+name = "anoma-solver-sdk"
 version = "0.1.0"
 edition = "2021"
 description = "Anoma Solver SDK"
@@ -7,3 +7,19 @@ description = "Anoma Solver SDK"
 [dependencies]
 anoma-network = { path = "../../network" }
 anoma-primitives = { path = "../../primitives" }
+
+[dev-dependencies]
+
+rand = "0.8.5"
+anyhow = "1.0"
+futures = "0.3"
+tokio = { version = "1.22", features = ["full"] }
+clap = { version = "4.0", features = ["derive"] }
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+
+[[example]]
+name = "pgqf-solver"
+path = "examples/pgqf/main.rs"

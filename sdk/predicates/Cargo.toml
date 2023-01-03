@@ -27,3 +27,7 @@ bs58 = "0.4"
 [[example]]
 name = "token"
 crate-type = ["cdylib"]
+
+[[example]]
+name = "pgqf"
+crate-type = ["cdylib"]

@@ -43,16 +43,6 @@ To run unit tests run the following command in the root directory:
 $ make test
 ```
 
-To run this topology with 30 validators and 4 solvers make sure that you have Docker and `docker-compose` installed on your system and run:
-
-```
-$ docker-compose up --build --remove-orphans --scale validator_n=30 --scale solver_n=4
-```
-
-This command will configure and run the topology described in the above diagram and expose two a HTTP interfaces on port `8081` and a blockchain explorer on port `8083`.
-
-To monitor various metrics recorded by telemetry navigate your browser to http://localhost:10000.
-
 ## Nodes
 
 ### Solver
@@ -88,9 +78,19 @@ This crate defines basic types used across all types of nodes in the network, su
 
 This crate implements the P2P gossip mechanism used by all nodes that participate in the gossip. More details about this crate are [here](network/README.md).
 
-### Predicates Rust SDK
+### SDK
+
+#### Predicates Rust SDK
 
 This crate is a Rust-based SDK for building WASM predicates that validate state on-chain. More details about this crate are [here](sdk/predicates/README.md).
+
+#### Solver Rust SDK
+
+This crate is a Rust-based SDK for building intent solvers that fulfill intents and create transactions. More details about this create are [here](sdk/solver/README.md).
+
+#### Local Devnode
+
+This crate implements a local single-machine validator node with no consensus for development and test scenarios. More details about this crate are [here](sdk/devnode/README.md).
 
 ### Standard Predicate Library
 
