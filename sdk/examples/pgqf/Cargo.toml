@@ -1,0 +1,53 @@
+[package]
+name = "pgqf-sdk-example"
+version = "0.1.0"
+edition = "2021"
+description = "Anoma SDK Public Goods Quadratic Funding Example"
+
+[dependencies]
+anoma-primitives = { path = "../../../primitives" }
+anoma-predicates-sdk = { path = "../../predicates" }
+bs58 = "0.4"
+rmp-serde = "1.1"
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+
+anoma-network = { path = "../../../network", optional = true }
+humantime = { version = "2.1", optional = true }
+once_cell = { version = "1.16", optional = true }
+wasmer = { version = "3.1", features = ["cranelift"], optional = true }
+tokio = { version = "1.23", features = ["full"], optional = true }
+clap = { version = "4.0", features = ["derive"], optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = [
+  "env-filter",
+], optional = true }
+futures = { version = "0.3", optional = true }
+
+[features]
+nodes = [
+  "humantime",
+  "once_cell",
+  "wasmer",
+  "tokio",
+  "clap",
+  "tracing",
+  "tracing-subscriber",
+  "futures",
+  "anoma-network"
+]
+
+[[bin]]
+name = "pgqf-client"
+path = "src/client.rs"
+required-features = ["nodes"]
+
+[[bin]]
+name = "pgqf-solver"
+path = "src/solver.rs"
+required-features = ["nodes"]
+
+[lib]
+name = "pgqf_predicates"
+path = "src/predicates.rs"
+crate-type = ["cdylib"]

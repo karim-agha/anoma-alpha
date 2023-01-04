@@ -6,19 +6,17 @@ use {
     Keypair,
     Network,
   },
-  anoma_primitives::{Account, Code, Param, Predicate, PredicateTree},
+  anoma_primitives::{Account, Block, Code, Param, Predicate, PredicateTree},
   anoma_vm::StateDiff,
   clap::Parser,
   futures::StreamExt,
   multihash::MultihashDigest,
   rmp_serde::{from_slice, to_vec},
   tokio::time::{interval, MissedTickBehavior},
-  tracing::{info, subscriber::set_global_default},
-  tracing_subscriber::FmtSubscriber,
+  tracing::{info, warn},
   wasmer::{Cranelift, Module, Store},
 };
 
-mod block;
 mod mempool;
 mod settings;
 mod storage;
@@ -101,8 +99,7 @@ fn persist_block(height: u64, blockdata: &[u8]) -> anyhow::Result<StateDiff> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-  // configure logging
-  set_global_default(FmtSubscriber::new())?;
+  tracing_subscriber::fmt::init();
 
   // gather CLI parameters
   let settings = SystemSettings::parse();
@@ -123,10 +120,15 @@ async fn main() -> anyhow::Result<()> {
   interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
   // get last known block #:
-  let mut height: u64 = blocks_store
+  let height: u64 = blocks_store
     .get(&"/block_num".parse()?)
     .map(|a| from_slice(&a.state).expect("corrupt db"))
     .unwrap_or_default();
+
+  let mut lastblock = blocks_store
+    .get(&format!("/block/{height}").parse()?)
+    .map(|a| from_slice(&a.state).expect("corrupt db"))
+    .unwrap_or(Block::zero());
 
   loop {
     tokio::select! {
@@ -136,20 +138,25 @@ async fn main() -> anyhow::Result<()> {
         }
       }
       _ = interval.tick() => {
-        height += 1;
-        let (block, statediff) = mempool.produce(&*state_store, &*code_cache);
-        info!("produced block #{height} with {} transactions and {} account mutations",
-          block.transactions.len(), statediff.iter().count());
+        let (block, statediff) = mempool.produce(&*state_store, &*code_cache, &lastblock);
+        info!("produced block {} (#{}) with {} transactions and {} account mutations",
+          bs58::encode(&block.hash().to_bytes()).into_string(),
+          block.height,
+          block.transactions.len(),
+          statediff.iter().count());
 
         // serialize block bytes
-        let block = to_vec(&block)?;
+        let blockbytes = to_vec(&block)?;
+        lastblock = block;
 
         code_cache.apply(precompile_predicates(&statediff)?);
         state_store.apply(statediff);
-        blocks_store.apply(persist_block(height, &block)?);
+        blocks_store.apply(persist_block(height, &blockbytes)?);
 
         // broadcast through p2p to all other nodes
-        blocks_topic.gossip(block);
+        if let Err(e) = blocks_topic.gossip(blockbytes) {
+          warn!("failed to gossip block: {e:?}");
+        }
       }
     }
   }

@@ -41,11 +41,17 @@ use {
   },
   thiserror::Error,
   tokio::sync::mpsc::UnboundedSender,
-  tracing::{debug, error, info, warn},
+  tracing::{debug, error, warn},
 };
 
 #[derive(Debug, Error)]
-pub enum Error {}
+pub enum Error {
+  #[error("Message size exceeds maximum allowed size")]
+  MessageTooLarge,
+
+  #[error("No peers connected")]
+  NoConnectedPeers,
+}
 
 #[derive(Debug)]
 pub struct Config {
@@ -153,8 +159,16 @@ pub struct Topic {
 // Public API
 impl Topic {
   /// Propagate a message to connected active peers
-  pub fn gossip(&self, data: Vec<u8>) {
+  pub fn gossip(&self, data: Vec<u8>) -> Result<(), Error> {
     let inner = self.inner.read();
+    if data.len() > inner.network_config.max_transmit_size {
+      return Err(Error::MessageTooLarge);
+    }
+
+    if inner.active_peers.is_empty() {
+      return Err(Error::NoConnectedPeers);
+    }
+
     let data: Bytes = data.into();
     for (peer, (connection, _)) in inner.active_peers.iter() {
       inner.send_message(
@@ -166,6 +180,8 @@ impl Topic {
         ),
       );
     }
+
+    Ok(())
   }
 }
 
@@ -218,7 +234,7 @@ impl Topic {
     let mut inner = self.inner.write();
 
     if !matches!(event, Event::Tick) {
-      info!("{}: {event:?}", inner.topic_config.name);
+      debug!("{}: {event:?}", inner.topic_config.name);
     }
 
     match event {
@@ -444,7 +460,7 @@ impl TopicInner {
     reason: &str,
   ) {
     if !self.pending_disconnects.insert(peer) {
-      tracing::info!(
+      tracing::debug!(
         "{}: disconnecting {}: {reason}",
         self.topic_config.name,
         peer
@@ -547,7 +563,7 @@ impl TopicInner {
       .insert(peer.peer_id, peer.addresses)
       .is_none()
     {
-      info!(
+      debug!(
         "{}: added to passive view: {}",
         self.topic_config.name, peer.peer_id
       );
@@ -582,7 +598,7 @@ impl TopicInner {
       return;
     }
 
-    info!("{}: added to active view: {peer:?}", self.topic_config.name);
+    debug!("{}: added to active view: {peer:?}", self.topic_config.name);
 
     self
       .active_peers
@@ -593,7 +609,7 @@ impl TopicInner {
 
   fn move_active_to_passive(&mut self, peer_id: PeerId) {
     if let Some((_, addresses)) = self.active_peers.remove(&peer_id) {
-      info!(
+      debug!(
         "{}: removed from active view: {peer_id:?}",
         self.topic_config.name
       );
@@ -1039,7 +1055,7 @@ impl TopicInner {
                 peers: msg.peers.clone(),
               }),
             ),
-          )
+          );
         }
       }
     }
@@ -1173,7 +1189,7 @@ impl TopicInner {
     // make sure that we haven't already started neighbouring
     // with this peer.
     if !self.pending_neighbours.insert(peer.peer_id) {
-      tracing::info!(
+      tracing::debug!(
         "{}: initiating NEIGHBOUR with {peer:?}",
         self.topic_config.name
       );

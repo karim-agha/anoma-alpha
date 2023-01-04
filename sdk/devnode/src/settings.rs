@@ -71,7 +71,7 @@ impl SystemSettings {
       .collect()
   }
 
-  pub fn rpc_addrs(&self) -> Vec<SocketAddr> {
+  pub fn _rpc_addrs(&self) -> Vec<SocketAddr> {
     self.ip
       .iter()
       .cloned()
@@ -82,21 +82,21 @@ impl SystemSettings {
   pub fn state_storage(&self) -> anyhow::Result<Box<dyn State>> {
     Ok(match &self.data_dir {
         Some(path) => Box::new(OnDiskStateStore::new(path, "state")?),
-        None => Box::new(InMemoryStateStore::default()),
+        None => Box::<InMemoryStateStore>::default(),
     })
   }
 
   pub fn blocks_storage(&self) -> anyhow::Result<Box<dyn State>> {
     Ok(match &self.data_dir {
         Some(path) => Box::new(OnDiskStateStore::new(path, "blocks")?),
-        None => Box::new(InMemoryStateStore::default()),
+        None => Box::<InMemoryStateStore>::default(),
     })
   }
 
   pub fn cache_storage(&self) -> anyhow::Result<Box<dyn State>> {
     Ok(match &self.data_dir {
         Some(path) => Box::new(OnDiskStateStore::new(path, "cache")?),
-        None => Box::new(InMemoryStateStore::default()),
+        None => Box::<InMemoryStateStore>::default(),
     })
   }
 

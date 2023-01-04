@@ -23,10 +23,11 @@ impl OnDiskStateStore {
 
 impl State for OnDiskStateStore {
   fn get(&self, address: &Address) -> Option<Account> {
-    match self.tree.get(address.to_string()).expect("db io error") {
-      Some(bytes) => Some(from_slice(&bytes).expect("db corrupt")),
-      None => None,
-    }
+    self
+      .tree
+      .get(address.to_string())
+      .expect("db io error")
+      .map(|bytes| from_slice(&bytes).expect("db corrupt"))
   }
 
   fn apply(&mut self, diff: StateDiff) {

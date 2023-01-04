@@ -36,7 +36,7 @@ fn verify_signature(input_fn: &ItemFn) -> bool {
   let reserved_names = ["__allocate", "__ingest_params", "__ingest_context"];
   let name: String = input_fn.sig.ident.to_string();
   if reserved_names.into_iter().any(|n| n == name) {
-    panic!("Predicate is using a reserved name: {}", name);
+    panic!("Predicate is using a reserved name: {name}");
   }
 
   let mut argiter = input_fn.sig.inputs.iter();
@@ -106,6 +106,9 @@ fn verify_signature(input_fn: &ItemFn) -> bool {
 fn decorate_entrypoint_abi(input_fn: &mut ItemFn) {
   input_fn.attrs.push(parse_quote! {
     #[no_mangle]
+  });
+  input_fn.attrs.push(parse_quote! {
+    #[allow(clippy::ptr_arg)]
   });
 
   input_fn.sig.abi = Some(Abi {

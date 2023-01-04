@@ -9,6 +9,7 @@ members = [
   "sdk/predicates/derive",
   "sdk/solver",
   "sdk/devnode",
+  "sdk/examples/pgqf",
 ]
 
 [profile.release]

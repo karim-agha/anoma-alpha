@@ -42,7 +42,7 @@ pub struct Transaction<R: Repr = Exact> {
   /// Proposals for new contents of accounts under given addresses.
   ///
   /// If all predicates in all involved accounts and their parents
-  /// evaluate to true, then the account contents will be replaced by
+  /// evaluate to true, then the account contents will be repmvxfvm laced by
   /// this value.
   pub proposals: BTreeMap<Address, R::AccountChange>,
 

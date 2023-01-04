@@ -137,7 +137,7 @@ impl Network {
   /// Instanciates a network object.
   pub fn new(config: Config, keypair: Keypair) -> Result<Self, Error> {
     let peer_id = keypair.public().into();
-    tracing::info!("local identity: {peer_id}");
+    debug!("local identity: {peer_id}");
     let commands = Channel::new();
     Ok(Self {
       topics: HashMap::new(),
@@ -216,7 +216,7 @@ impl Network {
   fn begin_connect(&mut self, addr: Multiaddr, topic: String) {
     self.muxer.put_dial(addr.clone(), topic.clone());
     if self.muxer.next_dial(&addr, &topic) {
-      tracing::info!(?addr, ?topic, "next_dial");
+      debug!(?addr, ?topic, "next_dial");
       self.runloop.send_command(runloop::Command::Connect(addr));
     }
   }
@@ -236,7 +236,7 @@ impl Network {
       if let Some(topic) = self.muxer.match_dial(&peer, connection) {
         for addr in &peer.addresses {
           if self.muxer.next_dial(addr, &topic) {
-            tracing::info!(?addr, ?topic, "next_dial");
+            debug!(?addr, ?topic, "next_dial");
             self
               .runloop
               .send_command(runloop::Command::Connect(addr.clone()));
@@ -276,7 +276,7 @@ impl Network {
         .expect("resolve would return None");
       topic.inject_event(Event::PeerDisconnected(peer, connection));
     } else {
-      tracing::info!(?peer, "disconnected from unknown topic");
+      debug!(?peer, "disconnected from unknown topic");
     }
 
     self.muxer.disconnect(peer, connection);
@@ -412,7 +412,7 @@ impl Stream for Network {
       // check outstanding requested dials
       if let Some((topic, addr)) = self.muxer.poll_dial() {
         if self.muxer.next_dial(&addr, &topic) {
-          tracing::info!(?addr, ?topic, "next_dial");
+          debug!(?addr, ?topic, "next_dial");
           self.runloop.send_command(runloop::Command::Connect(addr));
         }
       }

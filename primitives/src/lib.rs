@@ -5,6 +5,7 @@ extern crate alloc;
 mod account;
 mod address;
 mod b58;
+mod block;
 mod intent;
 mod predicate;
 mod transaction;
@@ -53,4 +54,11 @@ impl Repr for Exact {
   type Param = Param;
 }
 
-pub use {account::*, address::*, intent::*, predicate::*, transaction::*};
+pub use {
+  account::*,
+  address::*,
+  block::*,
+  intent::*,
+  predicate::*,
+  transaction::*,
+};
