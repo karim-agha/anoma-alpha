@@ -8,6 +8,7 @@ description = "Anoma Local Devnode"
 anoma-vm = { path = "../../vm" }
 anoma-network = { path = "../../network" }
 anoma-primitives = { path = "../../primitives" }
+anoma-client-sdk = { path = "../client" }
 
 bs58 = "0.4"
 anyhow = "1.0"

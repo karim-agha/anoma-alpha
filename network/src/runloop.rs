@@ -17,7 +17,7 @@ use {
     identity::Keypair,
     noise::{self, NoiseConfig, X25519Spec},
     swarm::{SwarmBuilder, SwarmEvent},
-    tcp::{GenTcpConfig, TokioTcpTransport},
+    tcp,
     yamux::YamuxConfig,
     Multiaddr,
     PeerId,
@@ -103,9 +103,10 @@ fn build_swarm(
   // TCP transport with DNS resolution, NOISE encryption and Yammux
   // substream multiplexing.
   let transport = {
-    let transport = TokioDnsConfig::system(TokioTcpTransport::new(
-      GenTcpConfig::new().port_reuse(false).nodelay(true),
-    ))?;
+    let transport =
+      TokioDnsConfig::system(libp2p::tcp::tokio::Transport::new(
+        tcp::Config::new().port_reuse(false).nodelay(true),
+      ))?;
 
     let noise_keys =
       noise::Keypair::<X25519Spec>::new().into_authentic(&keypair)?;
@@ -119,15 +120,11 @@ fn build_swarm(
   };
 
   Ok(
-    SwarmBuilder::new(
+    SwarmBuilder::with_tokio_executor(
       transport, //
       Behaviour::new(config.clone()),
       keypair.public().into(),
     )
-    // invoke libp2p tasks on current reactor
-    .executor(Box::new(|f| {
-      tokio::spawn(f);
-    }))
     .build(),
   )
 }

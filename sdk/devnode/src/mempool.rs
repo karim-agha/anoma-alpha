@@ -1,33 +1,34 @@
 use {
+  anoma_client_sdk::BlockStateBuilder,
   anoma_primitives::{Block, Transaction},
-  anoma_vm::{execute_many, State, StateDiff},
 };
 
-#[derive(Default)]
-pub struct Mempool {
+pub struct Mempool<'s> {
   txs: Vec<Transaction>,
+  blocks: BlockStateBuilder<'s>,
 }
 
-impl Mempool {
+impl<'s> Mempool<'s> {
+  pub fn new(block_consumer: BlockStateBuilder<'s>) -> Self {
+    Self {
+      txs: vec![],
+      blocks: block_consumer,
+    }
+  }
+
   pub fn consume(&mut self, tx: Transaction) {
     self.txs.push(tx);
   }
 
-  pub fn produce(
-    &mut self,
-    state: &dyn State,
-    cache: &dyn State,
-    parent: &Block,
-  ) -> (Block, StateDiff) {
+  pub fn produce(&mut self) -> Block {
     let txs = std::mem::take(&mut self.txs);
-    let block = Block::new(parent, txs.clone());
-    let results = execute_many(state, cache, txs.into_iter());
-    let statediff = results
-      .into_iter()
-      .filter_map(|res| res.ok())
-      .reduce(|acc, e| acc.merge(e))
-      .unwrap_or_default();
+    let parent = self.blocks.last();
+    let block = Block::new(parent, txs);
+    self
+      .blocks
+      .consume(block.clone())
+      .expect("height and parent verified here");
 
-    (block, statediff)
+    block
   }
 }

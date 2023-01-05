@@ -5,8 +5,12 @@ edition = "2021"
 description = "Anoma Client Rust SDK"
 
 [dependencies]
-anoma-network = { path = "../../network" }
+anoma-vm = { path = "../../vm" }
 anoma-primitives = { path = "../../primitives" }
+thiserror = "1.0"
+multihash = "0.17.0"
+bs58 = "0.4"
+wasmer = { version = "3.1", features = ["cranelift"] }
 
 [dev-dependencies]
 rand = "0.8.5"

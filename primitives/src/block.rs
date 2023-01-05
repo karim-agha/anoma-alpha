@@ -6,7 +6,7 @@ use {
   serde::{Deserialize, Serialize},
 };
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Block {
   pub height: u64,
   pub parent: Multihash,
@@ -31,7 +31,7 @@ impl Block {
       height: 0,
       parent: Multihash::default(),
       transactions: vec![],
-      hash_cache: Default::default(),
+      hash_cache: OnceCell::new(),
     }
   }
 
