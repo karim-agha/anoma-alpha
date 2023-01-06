@@ -12,6 +12,7 @@ use {
   clap::Parser,
   futures::StreamExt,
   rmp_serde::{from_slice, to_vec},
+  std::num::NonZeroUsize,
   tokio::time::{interval, MissedTickBehavior},
   tracing::{info, warn},
 };
@@ -58,15 +59,15 @@ async fn main() -> anyhow::Result<()> {
   let mut interval = interval(settings.block_time());
   interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-  const EPOCH_LEN: usize = 64;
+  let history_length = unsafe { NonZeroUsize::new_unchecked(64) };
   let mut code_cache = InMemoryStateStore::default();
   let mut state_store = InMemoryStateStore::default();
   let mut mempool = Mempool::new(BlockStateBuilder::new(
-    EPOCH_LEN,
+    history_length,
     &mut state_store,
     &mut code_cache,
     std::iter::once(Block::zero()),
-  ));
+  )?);
 
   loop {
     tokio::select! {

@@ -1,9 +1,10 @@
 use {
   crate::settings::SystemSettings,
+  anoma_client_sdk::{BlockchainWatcher, InMemoryStateStore},
   anoma_network as network,
   anoma_primitives::{Block, Intent, Transaction},
   clap::Parser,
-  futures::{Stream, StreamExt},
+  futures::{future::join_all, Stream, StreamExt},
   multihash::Multihash,
   network::{
     topic::{self, Topic},
@@ -13,13 +14,13 @@ use {
   },
   rand::{seq::SliceRandom, Rng},
   rmp_serde::{from_slice, to_vec},
-  std::{collections::HashMap, time::Duration},
+  std::{collections::HashMap, num::NonZeroUsize, time::Duration},
   tracing::info,
 };
 
 mod settings;
 
-type BlocksStream = dyn Stream<Item = Result<Block, rmp_serde::decode::Error>>;
+type BlocksStream = dyn Stream<Item = Block>;
 
 // (blocks, intents) topic handles
 fn start_network(settings: &SystemSettings) -> anyhow::Result<(Topic, Topic)> {
@@ -53,31 +54,46 @@ async fn main() -> anyhow::Result<()> {
   info!("Client options: {opts:?}");
 
   let (blocks, intents) = start_network(&opts)?;
-  let mut blocks = blocks.map(|bytes| from_slice::<Block>(&bytes));
+  let mut blocks =
+    blocks.filter_map(|bytes| async move { from_slice::<Block>(&bytes).ok() });
+
+  let mut code_cache = InMemoryStateStore::default();
+  let mut chain_state = InMemoryStateStore::default();
 
   // get a recent blockhash for constructing valid intents
   let recent_block = await_next_block(&mut blocks).await?;
-  let mut blockhash = *recent_block.hash();
 
   // the funding campaign will be open to public
   // donations in 10 blocks and will last for 100 blocks.
   let campaign_start = recent_block.height + 10;
   let campaign_end = campaign_start + 100;
 
+  let mut watcher = BlockchainWatcher::new(
+    NonZeroUsize::new(64).unwrap(),
+    &mut chain_state,
+    &mut code_cache,
+    std::iter::once(recent_block),
+    blocks,
+  )?;
+
   // first create a campaign:
   let tx = send_and_confirm_intents(
-    create_campaign_intents(blockhash, campaign_start, campaign_end),
+    std::iter::once(create_campaign_intent(
+      *watcher.most_recent_block().hash(),
+      campaign_start,
+      campaign_end,
+    )),
     &intents,
-    &mut blocks,
+    &mut watcher,
   )
   .await?;
   println!("Campaign created in tx: {tx:?}");
 
   // then add one project
   let tx = send_and_confirm_intents(
-    create_project_intents("project1", blockhash),
+    create_project_intents("project1", *watcher.most_recent_block().hash()),
     &intents,
-    &mut blocks,
+    &mut watcher,
   )
   .await?;
   println!("Added project1 in tx: {tx:?}");
@@ -85,14 +101,14 @@ async fn main() -> anyhow::Result<()> {
   // then add another three projects
   let tx = send_and_confirm_intents(
     [
-      create_project_intents("project2", blockhash),
-      create_project_intents("project3", blockhash),
-      create_project_intents("project4", blockhash),
+      create_project_intents("project2", *watcher.most_recent_block().hash()),
+      create_project_intents("project3", *watcher.most_recent_block().hash()),
+      create_project_intents("project4", *watcher.most_recent_block().hash()),
     ]
     .into_iter()
     .flatten(),
     &intents,
-    &mut blocks,
+    &mut watcher,
   )
   .await?;
   println!("Added projects 2-4 in tx: {tx:?}");
@@ -102,9 +118,12 @@ async fn main() -> anyhow::Result<()> {
 
   // first donation to the matching pool
   let tx = send_and_confirm_intents(
-    create_matching_pool_donation_intents(1200, blockhash),
+    create_matching_pool_donation_intents(
+      1200,
+      *watcher.most_recent_block().hash(),
+    ),
     &intents,
-    &mut blocks,
+    &mut watcher,
   )
   .await?;
   println!("Donated 1200 to matching pool in tx: {tx:?}");
@@ -113,30 +132,27 @@ async fn main() -> anyhow::Result<()> {
   // second batch of donations to the matching pool
   let tx = send_and_confirm_intents(
     [
-      create_matching_pool_donation_intents(1800, blockhash),
-      create_matching_pool_donation_intents(1200, blockhash),
+      create_matching_pool_donation_intents(
+        1800,
+        *watcher.most_recent_block().hash(),
+      ),
+      create_matching_pool_donation_intents(
+        1200,
+        *watcher.most_recent_block().hash(),
+      ),
     ]
     .into_iter()
     .flatten(),
     &intents,
-    &mut blocks,
+    &mut watcher,
   )
   .await?;
   println!("Donated 3000 to matching pool in tx: {tx:?}");
   matching_pool_amount += 3000;
 
-  // await campaign start block height
-  while let Ok(block) = await_next_block(&mut blocks).await {
-    if block.height > campaign_start {
-      // get a more recent blockhash
-      // now we know that transactions running
-      // from this point on will be targetting
-      // an ongoing campaign.
-
-      blockhash = *block.hash();
-      break;
-    }
-  }
+  // after this future complets, we know that transactions running
+  // from this point on will be targetting an ongoing campaign.
+  watcher.await_block_height(campaign_start).await;
 
   // gossip N random donation intents to random projects
   // with a random amount and store hash of the intent.
@@ -151,8 +167,11 @@ async fn main() -> anyhow::Result<()> {
   for _ in 0..N {
     let project = *projects.choose(&mut rand::thread_rng()).unwrap();
     let amount = rand::thread_rng().gen_range(100..10000);
-    let donation_intent =
-      create_project_donation_intent(project, amount, blockhash);
+    let donation_intent = create_project_donation_intent(
+      project,
+      amount,
+      *watcher.most_recent_block().hash(),
+    );
     if intents.gossip(to_vec(&donation_intent).unwrap()).is_ok() {
       println!("Donated {amount} to {project}");
       donations_intents.push(*donation_intent.hash());
@@ -171,21 +190,17 @@ async fn main() -> anyhow::Result<()> {
   }
 
   // wait for all donations intents to be included in blocks
-  let txs = confirm_intents(donations_intents.into_iter(), &mut blocks).await?;
-  println!(
-    "All project donations confirmed in transactions: {:?}",
-    txs.collect::<Vec<_>>()
-  );
+  let txs = join_all(
+    donations_intents
+      .into_iter()
+      .map(|ih| watcher.await_intent(ih)),
+  )
+  .await;
+
+  println!("All project donations confirmed in transactions: {txs:?}");
 
   // await campaign end block height
-  while let Ok(block) = await_next_block(&mut blocks).await {
-    if block.height > campaign_end {
-      // get a more recent blockhash
-      // now any tx will act on a campaign that is ended.
-      blockhash = *block.hash();
-      break;
-    }
-  }
+  watcher.await_block_height(campaign_end).await;
 
   // once the funding campaign is over, redistribute all
   // funds to projects.
@@ -193,10 +208,10 @@ async fn main() -> anyhow::Result<()> {
     std::iter::once(create_funding_redistribution_intent(
       matching_pool_amount,
       donation_amounts,
-      blockhash,
+      *watcher.most_recent_block().hash(),
     )),
     &intents,
-    &mut blocks,
+    &mut watcher,
   )
   .await?;
   println!("Donated 1200 to matching pool in tx: {tx:?}");
@@ -206,11 +221,11 @@ async fn main() -> anyhow::Result<()> {
 
 /// Gossips an intent through p2p to solvers and awaits a produced block
 /// from validators that contains a transaction with this intent.
-async fn send_and_confirm_intents(
+async fn send_and_confirm_intents<'s>(
   _intent: impl Iterator<Item = Intent>,
   _intents_topic: &Topic,
-  _blocks_topic: &mut BlocksStream,
-) -> anyhow::Result<Transaction> {
+  _watcher: &mut BlockchainWatcher<'s>,
+) -> anyhow::Result<&'s Transaction> {
   todo!();
 }
 
@@ -225,12 +240,12 @@ async fn await_next_block(_blocks: &mut BlocksStream) -> anyhow::Result<Block> {
   todo!();
 }
 
-fn create_campaign_intents(
+fn create_campaign_intent(
   blockhash: Multihash,
   _start_height: u64,
   _end_height: u64,
-) -> impl Iterator<Item = Intent> {
-  std::iter::once(Intent::new(blockhash, todo!()))
+) -> Intent {
+  Intent::new(blockhash, todo!())
 }
 
 fn create_project_intents(

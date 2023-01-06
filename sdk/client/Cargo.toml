@@ -11,12 +11,13 @@ thiserror = "1.0"
 multihash = "0.17.0"
 bs58 = "0.4"
 wasmer = { version = "3.1", features = ["cranelift"] }
+tokio = { version = "1.22", features = ["full"] }
+futures = "0.3"
+dashmap = "5.4"
 
 [dev-dependencies]
 rand = "0.8.5"
 anyhow = "1.0"
-futures = "0.3"
-tokio = { version = "1.22", features = ["full"] }
 clap = { version = "4.0", features = ["derive"] }
 rmp-serde = "1.1"
 tracing = "0.1"

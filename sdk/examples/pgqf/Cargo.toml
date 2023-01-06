@@ -13,6 +13,7 @@ anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 
 anoma-network = { path = "../../../network", optional = true }
+anoma-client-sdk = { path = "../../client", optional = true }
 humantime = { version = "2.1", optional = true }
 once_cell = { version = "1.16", optional = true }
 multihash = { version = "0.17", features = ["serde-codec"], optional = true }
@@ -39,6 +40,7 @@ nodes = [
   "futures",
   "multihash",
   "anoma-network",
+  "anoma-client-sdk"
 ]
 
 [[bin]]
