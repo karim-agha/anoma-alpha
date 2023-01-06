@@ -2,9 +2,18 @@ use {
   crate::settings::SystemSettings,
   anoma_client_sdk::{BlockchainWatcher, InMemoryStateStore},
   anoma_network as network,
-  anoma_primitives::{Block, Intent, Transaction},
+  anoma_predicates_sdk::{Address, Predicate},
+  anoma_primitives::{
+    Block,
+    Code,
+    Exact,
+    Intent,
+    Param,
+    PredicateTree,
+    Transaction,
+  },
   clap::Parser,
-  futures::{future::join_all, Stream, StreamExt},
+  futures::{future::join_all, StreamExt},
   multihash::Multihash,
   network::{
     topic::{self, Topic},
@@ -14,13 +23,16 @@ use {
   },
   rand::{seq::SliceRandom, Rng},
   rmp_serde::{from_slice, to_vec},
-  std::{collections::HashMap, num::NonZeroUsize, time::Duration},
+  std::{
+    collections::HashMap,
+    future::ready,
+    num::NonZeroUsize,
+    time::Duration,
+  },
   tracing::info,
 };
 
 mod settings;
-
-type BlocksStream = dyn Stream<Item = Block>;
 
 // (blocks, intents) topic handles
 fn start_network(settings: &SystemSettings) -> anyhow::Result<(Topic, Topic)> {
@@ -39,7 +51,7 @@ fn start_network(settings: &SystemSettings) -> anyhow::Result<(Topic, Topic)> {
 
   let intents_topic = network.join(topic::Config {
     name: format!("/{}/intents", settings.network_id()),
-    bootstrap: Default::default(),
+    bootstrap: settings.peers(),
   })?;
 
   tokio::spawn(network.runloop());
@@ -54,24 +66,25 @@ async fn main() -> anyhow::Result<()> {
   info!("Client options: {opts:?}");
 
   let (blocks, intents) = start_network(&opts)?;
-  let mut blocks =
-    blocks.filter_map(|bytes| async move { from_slice::<Block>(&bytes).ok() });
+  let mut blocks = blocks
+    .filter_map(|bytes| ready(from_slice::<Block>(&bytes).ok()))
+    .boxed();
 
-  let mut code_cache = InMemoryStateStore::default();
-  let mut chain_state = InMemoryStateStore::default();
-
-  // get a recent blockhash for constructing valid intents
-  let recent_block = await_next_block(&mut blocks).await?;
+  // Wait for some block on p2p to base our state off it
+  let recent_block = blocks.next().await.expect("blocks stream closed");
+  info!("First observed block: {recent_block:?}");
 
   // the funding campaign will be open to public
   // donations in 10 blocks and will last for 100 blocks.
   let campaign_start = recent_block.height + 10;
   let campaign_end = campaign_start + 100;
+  info!("Campain lifetime [{campaign_start}, {campaign_end}]");
 
+  #[allow(clippy::box_default)]
   let mut watcher = BlockchainWatcher::new(
     NonZeroUsize::new(64).unwrap(),
-    &mut chain_state,
-    &mut code_cache,
+    Box::leak(Box::new(InMemoryStateStore::default())),
+    Box::leak(Box::new(InMemoryStateStore::default())),
     std::iter::once(recent_block),
     blocks,
   )?;
@@ -79,31 +92,43 @@ async fn main() -> anyhow::Result<()> {
   // first create a campaign:
   let tx = send_and_confirm_intents(
     std::iter::once(create_campaign_intent(
-      *watcher.most_recent_block().hash(),
+      *watcher.most_recent_block().await.hash(),
       campaign_start,
       campaign_end,
-    )),
+    )?),
     &intents,
     &mut watcher,
   )
   .await?;
-  println!("Campaign created in tx: {tx:?}");
+  info!("Campaign created in tx: {tx:?}");
 
   // then add one project
   let tx = send_and_confirm_intents(
-    create_project_intents("project1", *watcher.most_recent_block().hash()),
+    create_project_intents(
+      "project1",
+      *watcher.most_recent_block().await.hash(),
+    ),
     &intents,
     &mut watcher,
   )
   .await?;
-  println!("Added project1 in tx: {tx:?}");
+  info!("Added project1 in tx: {tx:?}");
 
   // then add another three projects
   let tx = send_and_confirm_intents(
     [
-      create_project_intents("project2", *watcher.most_recent_block().hash()),
-      create_project_intents("project3", *watcher.most_recent_block().hash()),
-      create_project_intents("project4", *watcher.most_recent_block().hash()),
+      create_project_intents(
+        "project2",
+        *watcher.most_recent_block().await.hash(),
+      ),
+      create_project_intents(
+        "project3",
+        *watcher.most_recent_block().await.hash(),
+      ),
+      create_project_intents(
+        "project4",
+        *watcher.most_recent_block().await.hash(),
+      ),
     ]
     .into_iter()
     .flatten(),
@@ -111,7 +136,7 @@ async fn main() -> anyhow::Result<()> {
     &mut watcher,
   )
   .await?;
-  println!("Added projects 2-4 in tx: {tx:?}");
+  info!("Added projects 2-4 in tx: {tx:?}");
 
   // the campaign has not started yet, fund the matching pool
   let mut matching_pool_amount = 0;
@@ -120,13 +145,13 @@ async fn main() -> anyhow::Result<()> {
   let tx = send_and_confirm_intents(
     create_matching_pool_donation_intents(
       1200,
-      *watcher.most_recent_block().hash(),
+      *watcher.most_recent_block().await.hash(),
     ),
     &intents,
     &mut watcher,
   )
   .await?;
-  println!("Donated 1200 to matching pool in tx: {tx:?}");
+  info!("Donated 1200 to matching pool in tx: {tx:?}");
   matching_pool_amount += 1200;
 
   // second batch of donations to the matching pool
@@ -134,11 +159,11 @@ async fn main() -> anyhow::Result<()> {
     [
       create_matching_pool_donation_intents(
         1800,
-        *watcher.most_recent_block().hash(),
+        *watcher.most_recent_block().await.hash(),
       ),
       create_matching_pool_donation_intents(
         1200,
-        *watcher.most_recent_block().hash(),
+        *watcher.most_recent_block().await.hash(),
       ),
     ]
     .into_iter()
@@ -147,7 +172,7 @@ async fn main() -> anyhow::Result<()> {
     &mut watcher,
   )
   .await?;
-  println!("Donated 3000 to matching pool in tx: {tx:?}");
+  info!("Donated 3000 to matching pool in tx: {tx:?}");
   matching_pool_amount += 3000;
 
   // after this future complets, we know that transactions running
@@ -170,10 +195,10 @@ async fn main() -> anyhow::Result<()> {
     let donation_intent = create_project_donation_intent(
       project,
       amount,
-      *watcher.most_recent_block().hash(),
+      *watcher.most_recent_block().await.hash(),
     );
     if intents.gossip(to_vec(&donation_intent).unwrap()).is_ok() {
-      println!("Donated {amount} to {project}");
+      info!("Donated {amount} to {project}");
       donations_intents.push(*donation_intent.hash());
 
       donation_amounts
@@ -197,7 +222,7 @@ async fn main() -> anyhow::Result<()> {
   )
   .await;
 
-  println!("All project donations confirmed in transactions: {txs:?}");
+  info!("All project donations confirmed in transactions: {txs:?}");
 
   // await campaign end block height
   watcher.await_block_height(campaign_end).await;
@@ -208,13 +233,15 @@ async fn main() -> anyhow::Result<()> {
     std::iter::once(create_funding_redistribution_intent(
       matching_pool_amount,
       donation_amounts,
-      *watcher.most_recent_block().hash(),
+      *watcher.most_recent_block().await.hash(),
     )),
     &intents,
     &mut watcher,
   )
   .await?;
-  println!("Donated 1200 to matching pool in tx: {tx:?}");
+  info!("Donated 1200 to matching pool in tx: {tx:?}");
+
+  watcher.stop().await;
 
   Ok(())
 }
@@ -222,30 +249,79 @@ async fn main() -> anyhow::Result<()> {
 /// Gossips an intent through p2p to solvers and awaits a produced block
 /// from validators that contains a transaction with this intent.
 async fn send_and_confirm_intents<'s>(
-  _intent: impl Iterator<Item = Intent>,
-  _intents_topic: &Topic,
-  _watcher: &mut BlockchainWatcher<'s>,
-) -> anyhow::Result<&'s Transaction> {
-  todo!();
-}
+  intents: impl Iterator<Item = Intent>,
+  intents_topic: &Topic,
+  watcher: &mut BlockchainWatcher,
+) -> anyhow::Result<Vec<Transaction>> {
+  let (hashes, intents): (Vec<_>, Vec<_>) =
+    intents.map(|i| (*i.hash(), i)).unzip();
+  let hashes = hashes.into_iter().map(|h| watcher.await_intent(h));
 
-async fn confirm_intents(
-  _intents_hashes: impl Iterator<Item = Multihash>,
-  _blocks_topic: &mut BlocksStream,
-) -> anyhow::Result<impl Iterator<Item = Transaction>> {
-  Ok(std::iter::empty())
-}
+  for intent in intents {
+    loop {
+      info!("sending intent {intent:?}..");
+      match intents_topic.gossip(to_vec(&intent)?) {
+        Ok(_) => {
+          info!("done");
+          break;
+        }
+        Err(topic::Error::NoConnectedPeers) => {
+          // wait for this topic to establish connections with
+          // other peers and retry.
+          info!("awaiting peers...");
+          tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        Err(e) => return Err(e.into()),
+      }
+    }
+  }
 
-async fn await_next_block(_blocks: &mut BlocksStream) -> anyhow::Result<Block> {
-  todo!();
+  Ok(
+    join_all(hashes)
+      .await
+      .into_iter()
+      .filter_map(|tr| tr.ok())
+      .collect(),
+  )
 }
 
 fn create_campaign_intent(
   blockhash: Multihash,
-  _start_height: u64,
-  _end_height: u64,
-) -> Intent {
-  Intent::new(blockhash, todo!())
+  start_height: u64,
+  end_height: u64,
+) -> anyhow::Result<Intent> {
+  Ok(Intent::new(
+    blockhash,
+    PredicateTree::And(
+      Box::new(PredicateTree::Id(Predicate {
+        code: Code::AccountRef("/stdpred/v1".parse()?, "state_equal".into()),
+        params: vec![
+          Param::Inline(b"serialized-value-of-campaign-account-state".to_vec()),
+          Param::ProposalRef("/pgqf/spring-2023".parse()?),
+        ],
+      })),
+      Box::new(PredicateTree::Id(Predicate {
+        code: Code::AccountRef(
+          "/stdpred/v1".parse()?,
+          "predicates_equal".into(),
+        ),
+        params: vec![
+          Param::Inline(to_vec(&PredicateTree::<Exact>::Id(Predicate {
+            code: Code::AccountRef("/pgqf".parse()?, "predicate".into()),
+            params: vec![
+              Param::Inline(to_vec(&start_height)?),
+              Param::Inline(to_vec(&end_height)?),
+              Param::Inline(to_vec(&Address::new(
+                "/token/usdx/spring-2023.eth",
+              )?)?),
+              Param::Inline(to_vec(&Vec::<String>::default())?),
+            ],
+          }))?),
+          Param::ProposalRef("/pgqf/spring-2023".parse()?),
+        ],
+      })),
+    ),
+  ))
 }
 
 fn create_project_intents(
