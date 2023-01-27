@@ -12,12 +12,31 @@ use {
   serde::{Deserialize, Serialize},
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum Param {
   Inline(Vec<u8>),
   AccountRef(Address),
   ProposalRef(Address),
   CalldataRef(String),
+}
+
+impl core::fmt::Debug for Param {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    match self {
+      Self::Inline(arg0) => {
+        f.debug_tuple("Inline").field(&hex::encode(arg0)).finish()
+      }
+      Self::AccountRef(arg0) => {
+        f.debug_tuple("AccountRef").field(arg0).finish()
+      }
+      Self::ProposalRef(arg0) => {
+        f.debug_tuple("ProposalRef").field(arg0).finish()
+      }
+      Self::CalldataRef(arg0) => {
+        f.debug_tuple("CalldataRef").field(arg0).finish()
+      }
+    }
+  }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]

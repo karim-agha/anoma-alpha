@@ -4,6 +4,7 @@ use {
   multihash::{Multihash, MultihashDigest},
   std::{collections::VecDeque, num::NonZeroUsize},
   thiserror::Error,
+  tracing::info,
   wasmer::{Cranelift, Module, Store},
 };
 
@@ -21,7 +22,7 @@ pub enum Error {
 
 /// This type can be used to accumulate state changes from blocks produced
 /// by validators. It is useful everywhere where a node (solver, client, etc)
-/// need to maintain an up-to-date state of the chain and be able to query 
+/// need to maintain an up-to-date state of the chain and be able to query
 /// current accounts state.
 pub struct BlockStateBuilder<'s> {
   history_len: usize,
@@ -94,11 +95,21 @@ impl<'s> BlockStateBuilder<'s> {
       self.recent.pop_back();
     }
 
+    let txhashes: Vec<_> =
+      block.transactions.iter().map(|tx| *tx.hash()).collect();
+
     let results = execute_many(
       self.state, //
       self.codecache,
       block.transactions.into_iter(),
     );
+
+    for (result, tx) in results.iter().zip(txhashes.into_iter()) {
+      info!(
+        "Transaction {} result: {result:?}",
+        bs58::encode(tx.to_bytes()).into_string()
+      );
+    }
 
     let statediff = results
       .into_iter()

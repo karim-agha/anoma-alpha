@@ -16,7 +16,7 @@ use {
 /// wallet balance account defined at "/token/usda/walletaddress1", then any
 /// modification to the latter will trigger validity predicates stored at
 /// addresses.
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct Account {
   /// Arbitary data stored within an account, this could be some token
   /// balance for a user wallet, wasm bytecode that acts as a predicate,
@@ -43,4 +43,19 @@ pub struct Account {
   /// short-circut result is found. They are read-only functions, so
   /// execution order is irrelevant for the final result.
   pub predicates: PredicateTree,
+}
+
+impl core::fmt::Debug for Account {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let state = if self.state.starts_with(b"\0asm") {
+      "[wasm-bytecode]".into()
+    } else {
+      hex::encode(&self.state)
+    };
+
+    f.debug_struct("Account")
+      .field("state", &state)
+      .field("predicates", &self.predicates)
+      .finish()
+  }
 }

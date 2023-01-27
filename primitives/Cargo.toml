@@ -10,6 +10,7 @@ crate-type = ["cdylib", "lib"]
 
 [dependencies]
 bs58 = "0.4"
+hex = "0.4"
 time = "0.3"
 either = "1.8"
 rmp-serde = "1.1"

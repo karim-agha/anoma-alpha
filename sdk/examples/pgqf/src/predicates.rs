@@ -53,9 +53,21 @@ use {
 initialize_library!();
 
 #[predicate]
-fn predicate(
-  _params: &Vec<ExpandedParam>,
-  _context: &PredicateContext,
-) -> bool {
+fn campaign(_params: &Vec<ExpandedParam>, _context: &PredicateContext) -> bool {
+  true
+}
+
+#[predicate]
+fn project(_params: &Vec<ExpandedParam>, _context: &PredicateContext) -> bool {
+  true
+}
+
+#[predicate]
+fn donor(_params: &Vec<ExpandedParam>, _context: &PredicateContext) -> bool {
+  true
+}
+
+#[predicate]
+fn treasury(_params: &Vec<ExpandedParam>, _context: &PredicateContext) -> bool {
   true
 }

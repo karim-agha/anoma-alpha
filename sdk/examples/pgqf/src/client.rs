@@ -1,5 +1,12 @@
 use {
-  crate::settings::SystemSettings,
+  crate::{
+    io::{
+      install_bytecode,
+      send_and_confirm_intents,
+      send_and_confirm_transaction,
+    },
+    settings::SystemSettings,
+  },
   anoma_network as network,
   anoma_predicates_sdk::{Address, Predicate},
   anoma_primitives::{
@@ -15,6 +22,7 @@ use {
   anoma_sdk::{BlockchainWatcher, InMemoryStateStore},
   clap::Parser,
   futures::{future::join_all, StreamExt},
+  model::{Campaign, Project},
   multihash::Multihash,
   network::{
     topic::{self, Topic},
@@ -33,6 +41,8 @@ use {
   tracing::info,
 };
 
+mod io;
+mod model;
 mod settings;
 
 // (blocks, intents) topic handles
@@ -97,37 +107,63 @@ async fn main() -> anyhow::Result<()> {
     blocks,
   )?;
 
-  info!("Installing PGQF predicates...");
-  let block = send_and_confirm_transaction(
-    install_pgqf_bytecode()?,
+  info!("Installing Standard Predicate Library...");
+  send_and_confirm_transaction(
+    install_bytecode(
+      "/stdpred".parse()?,
+      include_bytes!(
+        "../../../../target/wasm32-unknown-unknown/release/stdpred.wasm"
+      ),
+    )?,
     &transactions,
     &mut watcher,
   )
   .await?;
-  info!(
-    "PGQF installed in block {}",
-    bs58::encode(&block.hash().to_bytes()).into_string()
-  );
+  info!("Standard Predicate Library installed");
+
+  info!("Installing PGQF predicates...");
+  send_and_confirm_transaction(
+    install_bytecode(
+      "/pgqf".parse()?,
+      include_bytes!(
+        "../../../../target/wasm32-unknown-unknown/release/pgqf_predicates.\
+         wasm"
+      ),
+    )?,
+    &transactions,
+    &mut watcher,
+  )
+  .await?;
+  info!("PGQF predicates installed",);
+
+  // create treasury wallet
+  send_and_confirm_transaction(
+    create_treasury("/token/usdc/spring-2023".parse()?)?,
+    &transactions,
+    &mut watcher,
+  )
+  .await?;
+  info!("Treasury wallet created.");
 
   // first create a campaign:
-  let block = send_and_confirm_transaction(
-    create_campaign_transaction(campaign_start, campaign_end)?,
+  send_and_confirm_transaction(
+    create_campaign_transaction(
+      campaign_start,
+      campaign_end,
+      "/token/usdc/spring-2023".parse()?,
+    )?,
     &transactions,
     &mut watcher,
   )
   .await?;
-
-  info!(
-    "Campaign created in block: {}",
-    bs58::encode(&block.hash().to_bytes()).into_string()
-  );
+  info!("Spring 2023 campaign created");
 
   // then add one project
   let tx = send_and_confirm_intents(
     create_project_intents(
       "project1",
       *watcher.most_recent_block().await.hash(),
-    ),
+    )?,
     &intents,
     &mut watcher,
   )
@@ -140,15 +176,15 @@ async fn main() -> anyhow::Result<()> {
       create_project_intents(
         "project2",
         *watcher.most_recent_block().await.hash(),
-      ),
+      )?,
       create_project_intents(
         "project3",
         *watcher.most_recent_block().await.hash(),
-      ),
+      )?,
       create_project_intents(
         "project4",
         *watcher.most_recent_block().await.hash(),
-      ),
+      )?,
     ]
     .into_iter()
     .flatten(),
@@ -266,126 +302,53 @@ async fn main() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// Gossips an intent through p2p to solvers and awaits a produced block
-/// from validators that contains a transaction with this intent.
-async fn send_and_confirm_intents<'s>(
-  intents: impl Iterator<Item = Intent>,
-  intents_topic: &Topic,
-  watcher: &mut BlockchainWatcher,
-) -> anyhow::Result<Vec<Transaction>> {
-  let (hashes, intents): (Vec<_>, Vec<_>) =
-    intents.map(|i| (*i.hash(), i)).unzip();
-  let hashes = hashes.into_iter().map(|h| watcher.await_intent(h));
-
-  for intent in intents {
-    loop {
-      info!("sending intent {intent:?}..");
-      match intents_topic.gossip(to_vec(&intent)?) {
-        Ok(_) => {
-          info!("done");
-          break;
-        }
-        Err(topic::Error::NoConnectedPeers) => {
-          // wait for this topic to establish connections with
-          // other peers and retry.
-          info!("awaiting peers...");
-          tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-        Err(e) => return Err(e.into()),
-      }
-    }
-  }
-
-  Ok(
-    join_all(hashes)
-      .await
-      .into_iter()
-      .filter_map(|tr| tr.ok())
-      .collect(),
-  )
-}
-
-/// Gossips a transaction through p2p to validators and awaits a produced block
-/// containing the transaction.
-async fn send_and_confirm_transaction(
-  transaction: Transaction,
-  transactions_topic: &Topic,
-  watcher: &mut BlockchainWatcher,
-) -> anyhow::Result<Block> {
-  let hash = *transaction.hash();
-  loop {
-    match transactions_topic.gossip(to_vec(&transaction)?) {
-      Ok(_) => {
-        info!(
-          "Transaction {} sent.",
-          bs58::encode(hash.to_bytes()).into_string()
-        );
-        break;
-      }
-      Err(topic::Error::NoConnectedPeers) => {
-        // wait for this topic to establish connections with
-        // other peers and retry.
-        info!("awaiting peers...");
-        tokio::time::sleep(Duration::from_secs(1)).await;
-      }
-      Err(e) => return Err(e.into()),
-    }
-  }
-
-  Ok(watcher.await_transaction(hash).await?)
-}
-
-fn install_pgqf_bytecode() -> anyhow::Result<Transaction> {
+/// Creates an empty wallet that will be used as the treasury for a campaign
+/// where funds are stored and then redistributed at the end of the campaign.
+/// Spending in this wallet is governed by the "spending" predicate from the
+/// PGQF bytecode.
+///
+/// This should be called for a wallet address that is governed by the /token/x/
+/// preds.
+fn create_treasury(wallet: Address) -> anyhow::Result<Transaction> {
   Ok(Transaction::new(
-    vec![],
+    vec![], // no intents
     [(
-      Address::new("/pgqf")?,
+      wallet.clone(),
       AccountChange::CreateAccount(Account {
-        state: include_bytes!(
-          "../../../../target/wasm32-unknown-unknown/release/pgqf_predicates.\
-           wasm"
-        )
-        .to_vec(),
-        predicates: PredicateTree::And(
-          Box::new(PredicateTree::Id(Predicate {
-            code: Code::AccountRef(
-              "/stdpred".parse()?,
-              "immutable_state".into(),
-            ),
-            params: vec![Param::Inline(to_vec(&Address::new("/pgqf")?)?)],
-          })),
-          Box::new(PredicateTree::Id(Predicate {
-            code: Code::AccountRef(
-              "/stdpred".parse()?,
-              "immutable_predicates".into(),
-            ),
-            params: vec![Param::Inline(to_vec(&Address::new("/pgqf")?)?)],
-          })),
-        ),
+        state: to_vec(&0u64)?, // start with zero balance
+        predicates: PredicateTree::Id(Predicate {
+          code: Code::AccountRef("/pgqf".parse()?, "treasury".into()),
+          params: vec![Param::AccountRef(wallet)],
+        }),
       }),
     )]
     .into(),
   ))
 }
 
+/// Creates a new funding campaign with no projects in it yet.
+/// Assigns it a treasury wallet address and makes it governed by the
+/// "campaign" predicate from PGQF bytecode.
 fn create_campaign_transaction(
   start_height: u64,
   end_height: u64,
+  treasury: Address,
 ) -> anyhow::Result<Transaction> {
   Ok(Transaction::new(
-    vec![],
+    vec![], // no intents
     [(
       Address::new("/pgqf/spring-2023")?,
       AccountChange::CreateAccount(Account {
-        state: b"serialized-value-of-campaign-account-state".to_vec(),
+        state: to_vec(&Campaign {
+          starts_at: start_height,
+          ends_at: end_height,
+          projects: Default::default(), // start with 0 projects
+        })?,
         predicates: PredicateTree::Id(Predicate {
-          code: Code::AccountRef("/pgqf".parse()?, "predicate".into()),
+          code: Code::AccountRef("/pgqf".parse()?, "campaign".into()),
           params: vec![
-            Param::Inline(to_vec(&start_height)?),
-            Param::Inline(to_vec(&end_height)?),
-            Param::Inline(to_vec(&Address::new(
-              "/token/usdx/pgqf-spring-2023.eth",
-            )?)?),
+            Param::AccountRef("/pgqf/spring-2023".parse()?),
+            Param::AccountRef(treasury),
           ],
         }),
       }),
@@ -394,11 +357,26 @@ fn create_campaign_transaction(
   ))
 }
 
+/// Creates an intent for solvers that expects a transaction adding a project to
+/// the campaign projects list. This should be called before a campaign begins.
+/// After a campaign begin, the projects list is frozen.
+///
+/// The solver will have to figure out all the details of adding this project to
+/// the list of projects in the campaign account state and all other plumbing.
 fn create_project_intents(
-  _name: &str,
+  name: &str,
   blockhash: Multihash,
-) -> impl Iterator<Item = Intent> {
-  std::iter::once(Intent::new(blockhash, todo!()))
+) -> anyhow::Result<impl Iterator<Item = Intent>> {
+  Ok(std::iter::once(Intent::new(
+    blockhash,
+    PredicateTree::Id(Predicate {
+      code: Code::AccountRef("/stdpred".parse()?, "bytes_equal".into()),
+      params: vec![
+        Param::ProposalRef(format!("/pgqf/spring-2023/{name}").parse()?),
+        Param::Inline(to_vec(&Project::default())?),
+      ],
+    }),
+  )))
 }
 
 fn create_matching_pool_donation_intents(
