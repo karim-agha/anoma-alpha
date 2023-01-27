@@ -1,5 +1,5 @@
 use {
-  anoma_client_sdk::BlockStateBuilder,
+  anoma_sdk::BlockStateBuilder,
   anoma_primitives::{Block, Transaction},
 };
 

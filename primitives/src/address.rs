@@ -98,7 +98,7 @@ impl Address {
         segment_len += 1;
       }
 
-      if !(c.is_alphanumeric()
+      if !(c.is_ascii_alphanumeric()
         || c == '/'
         || ALLOWED_SYMBOLS.iter().any(|s| *s == c))
       {

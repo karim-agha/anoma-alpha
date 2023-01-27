@@ -1,8 +1,8 @@
 [package]
-name = "anoma-client-sdk"
+name = "anoma-sdk"
 version = "0.1.0"
 edition = "2021"
-description = "Anoma Client Rust SDK"
+description = "Anoma Offchain Rust SDK"
 
 [dependencies]
 anoma-vm = { path = "../../vm" }
@@ -15,10 +15,3 @@ tokio = { version = "1.22", features = ["full"] }
 futures = "0.3"
 dashmap = "5.4"
 tracing = "0.1"
-
-[dev-dependencies]
-rand = "0.8.5"
-anyhow = "1.0"
-clap = { version = "4.0", features = ["derive"] }
-rmp-serde = "1.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }

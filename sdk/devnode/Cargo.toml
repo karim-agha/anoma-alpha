@@ -6,9 +6,9 @@ description = "Anoma Local Devnode"
 
 [dependencies]
 anoma-vm = { path = "../../vm" }
+anoma-sdk = { path = "../offchain" }
 anoma-network = { path = "../../network" }
 anoma-primitives = { path = "../../primitives" }
-anoma-client-sdk = { path = "../client" }
 
 bs58 = "0.4"
 anyhow = "1.0"

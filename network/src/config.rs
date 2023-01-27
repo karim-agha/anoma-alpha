@@ -128,7 +128,7 @@ impl Default for Config {
       maintenance_tick_interval: Duration::from_secs(5),
       pending_timeout: Duration::from_secs(15),
       dedupe_interval: Some(Duration::from_secs(5)),
-      max_transmit_size: 64 * 1024, // 64KB
+      max_transmit_size: 1024 * 1024, // 1MB
       listen_addrs: vec![
         "/ip4/0.0.0.0/tcp/44668".parse().unwrap(),
         "/ip6/::/tcp/44668".parse().unwrap(),

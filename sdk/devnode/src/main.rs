@@ -1,6 +1,5 @@
 use {
   crate::{mempool::Mempool, settings::SystemSettings},
-  anoma_client_sdk::BlockStateBuilder,
   anoma_network::{
     topic::{self, Topic},
     Config,
@@ -8,6 +7,7 @@ use {
     Network,
   },
   anoma_primitives::Block,
+  anoma_sdk::BlockStateBuilder,
   anoma_vm::InMemoryStateStore,
   clap::Parser,
   futures::StreamExt,
@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
   let mut interval = interval(settings.block_time());
   interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-  let history_length = unsafe { NonZeroUsize::new_unchecked(64) };
+  let history_length = NonZeroUsize::new(64).expect("compile time constant");
   let mut code_cache = InMemoryStateStore::default();
   let mut state_store = InMemoryStateStore::default();
   let mut mempool = Mempool::new(BlockStateBuilder::new(
@@ -80,8 +80,8 @@ async fn main() -> anyhow::Result<()> {
         let block = mempool.produce();
         info!("produced block {} (#{}) on top of {} with {} transactions.",
           bs58::encode(&block.hash().to_bytes()).into_string(),
-          bs58::encode(&block.parent.to_bytes()).into_string(),
           block.height,
+          bs58::encode(&block.parent.to_bytes()).into_string(),
           block.transactions.len());
 
         // broadcast through p2p to all other nodes

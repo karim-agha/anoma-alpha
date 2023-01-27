@@ -7,8 +7,8 @@ WORKDIR /code
 RUN cargo build --package stdpred --target wasm32-unknown-unknown --release && \
     cargo build --package anoma-predicates-sdk --example token --target wasm32-unknown-unknown --release && \
     cargo build --package anoma-devnode --release && \
-    cargo build --release --package pgqf-sdk-example --features="nodes" && \
-    cargo build --release --package pgqf-sdk-example --lib --target wasm32-unknown-unknown
+    cargo build --release --package pgqf-sdk-example --lib --target wasm32-unknown-unknown && \
+    cargo build --release --package pgqf-sdk-example --features="node"
 
 FROM rust:1.66-slim-bullseye
 WORKDIR /home

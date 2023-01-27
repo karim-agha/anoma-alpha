@@ -4,10 +4,9 @@ members = [
   "primitives",
   "vm",
   "stdpred",
-  "sdk/client",
   "sdk/predicates",
   "sdk/predicates/derive",
-  "sdk/solver",
+  "sdk/offchain",
   "sdk/devnode",
   "sdk/examples/pgqf",
 ]

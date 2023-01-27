@@ -6,12 +6,19 @@ use {
   futures::{Stream, StreamExt},
   multihash::Multihash,
   std::{num::NonZeroUsize, sync::Arc},
+  thiserror::Error,
   tokio::sync::{
     oneshot::{self, error::RecvError, Sender},
     RwLock,
   },
   tracing::error,
 };
+
+#[derive(Debug, Error)]
+pub enum Error {
+  #[error("The awaited block is already in distant history")]
+  BlockInDistantHistory,
+}
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 enum WatchlistKey {
@@ -178,8 +185,8 @@ impl BlockchainWatcher {
     })
   }
 
-  pub async fn await_block_height(&self, height: u64) -> Block {
-    todo!()
+  pub async fn await_block_height(&self, height: u64) -> Result<Block, Error> {
+    todo!();
   }
 
   pub async fn stop(self) {

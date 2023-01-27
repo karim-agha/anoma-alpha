@@ -1,17 +1,18 @@
 use {
   crate::settings::SystemSettings,
-  anoma_client_sdk::{BlockchainWatcher, InMemoryStateStore},
   anoma_network as network,
   anoma_predicates_sdk::{Address, Predicate},
   anoma_primitives::{
+    Account,
+    AccountChange,
     Block,
     Code,
-    Exact,
     Intent,
     Param,
     PredicateTree,
     Transaction,
   },
+  anoma_sdk::{BlockchainWatcher, InMemoryStateStore},
   clap::Parser,
   futures::{future::join_all, StreamExt},
   multihash::Multihash,
@@ -35,7 +36,9 @@ use {
 mod settings;
 
 // (blocks, intents) topic handles
-fn start_network(settings: &SystemSettings) -> anyhow::Result<(Topic, Topic)> {
+fn start_network(
+  settings: &SystemSettings,
+) -> anyhow::Result<(Topic, Topic, Topic)> {
   let mut network = Network::new(
     Config {
       listen_addrs: settings.p2p_addrs(),
@@ -54,8 +57,13 @@ fn start_network(settings: &SystemSettings) -> anyhow::Result<(Topic, Topic)> {
     bootstrap: settings.peers(),
   })?;
 
+  let transactions_topic = network.join(topic::Config {
+    name: format!("/{}/transactions", settings.network_id()),
+    bootstrap: settings.peers(),
+  })?;
+
   tokio::spawn(network.runloop());
-  Ok((blocks_topic, intents_topic))
+  Ok((blocks_topic, transactions_topic, intents_topic))
 }
 
 #[tokio::main]
@@ -65,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
   let opts = SystemSettings::parse();
   info!("Client options: {opts:?}");
 
-  let (blocks, intents) = start_network(&opts)?;
+  let (blocks, transactions, intents) = start_network(&opts)?;
   let mut blocks = blocks
     .filter_map(|bytes| ready(from_slice::<Block>(&bytes).ok()))
     .boxed();
@@ -78,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
   // donations in 10 blocks and will last for 100 blocks.
   let campaign_start = recent_block.height + 10;
   let campaign_end = campaign_start + 100;
-  info!("Campain lifetime [{campaign_start}, {campaign_end}]");
+  info!("Campaign lifetime [{campaign_start}, {campaign_end}]");
 
   #[allow(clippy::box_default)]
   let mut watcher = BlockchainWatcher::new(
@@ -89,18 +97,30 @@ async fn main() -> anyhow::Result<()> {
     blocks,
   )?;
 
-  // first create a campaign:
-  let tx = send_and_confirm_intents(
-    std::iter::once(create_campaign_intent(
-      *watcher.most_recent_block().await.hash(),
-      campaign_start,
-      campaign_end,
-    )?),
-    &intents,
+  info!("Installing PGQF predicates...");
+  let block = send_and_confirm_transaction(
+    install_pgqf_bytecode()?,
+    &transactions,
     &mut watcher,
   )
   .await?;
-  info!("Campaign created in tx: {tx:?}");
+  info!(
+    "PGQF installed in block {}",
+    bs58::encode(&block.hash().to_bytes()).into_string()
+  );
+
+  // first create a campaign:
+  let block = send_and_confirm_transaction(
+    create_campaign_transaction(campaign_start, campaign_end)?,
+    &transactions,
+    &mut watcher,
+  )
+  .await?;
+
+  info!(
+    "Campaign created in block: {}",
+    bs58::encode(&block.hash().to_bytes()).into_string()
+  );
 
   // then add one project
   let tx = send_and_confirm_intents(
@@ -177,7 +197,7 @@ async fn main() -> anyhow::Result<()> {
 
   // after this future complets, we know that transactions running
   // from this point on will be targetting an ongoing campaign.
-  watcher.await_block_height(campaign_start).await;
+  watcher.await_block_height(campaign_start).await?;
 
   // gossip N random donation intents to random projects
   // with a random amount and store hash of the intent.
@@ -225,7 +245,7 @@ async fn main() -> anyhow::Result<()> {
   info!("All project donations confirmed in transactions: {txs:?}");
 
   // await campaign end block height
-  watcher.await_block_height(campaign_end).await;
+  watcher.await_block_height(campaign_end).await?;
 
   // once the funding campaign is over, redistribute all
   // funds to projects.
@@ -285,42 +305,92 @@ async fn send_and_confirm_intents<'s>(
   )
 }
 
-fn create_campaign_intent(
-  blockhash: Multihash,
+/// Gossips a transaction through p2p to validators and awaits a produced block
+/// containing the transaction.
+async fn send_and_confirm_transaction(
+  transaction: Transaction,
+  transactions_topic: &Topic,
+  watcher: &mut BlockchainWatcher,
+) -> anyhow::Result<Block> {
+  let hash = *transaction.hash();
+  loop {
+    match transactions_topic.gossip(to_vec(&transaction)?) {
+      Ok(_) => {
+        info!(
+          "Transaction {} sent.",
+          bs58::encode(hash.to_bytes()).into_string()
+        );
+        break;
+      }
+      Err(topic::Error::NoConnectedPeers) => {
+        // wait for this topic to establish connections with
+        // other peers and retry.
+        info!("awaiting peers...");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+      }
+      Err(e) => return Err(e.into()),
+    }
+  }
+
+  Ok(watcher.await_transaction(hash).await?)
+}
+
+fn install_pgqf_bytecode() -> anyhow::Result<Transaction> {
+  Ok(Transaction::new(
+    vec![],
+    [(
+      Address::new("/pgqf")?,
+      AccountChange::CreateAccount(Account {
+        state: include_bytes!(
+          "../../../../target/wasm32-unknown-unknown/release/pgqf_predicates.\
+           wasm"
+        )
+        .to_vec(),
+        predicates: PredicateTree::And(
+          Box::new(PredicateTree::Id(Predicate {
+            code: Code::AccountRef(
+              "/stdpred".parse()?,
+              "immutable_state".into(),
+            ),
+            params: vec![Param::Inline(to_vec(&Address::new("/pgqf")?)?)],
+          })),
+          Box::new(PredicateTree::Id(Predicate {
+            code: Code::AccountRef(
+              "/stdpred".parse()?,
+              "immutable_predicates".into(),
+            ),
+            params: vec![Param::Inline(to_vec(&Address::new("/pgqf")?)?)],
+          })),
+        ),
+      }),
+    )]
+    .into(),
+  ))
+}
+
+fn create_campaign_transaction(
   start_height: u64,
   end_height: u64,
-) -> anyhow::Result<Intent> {
-  Ok(Intent::new(
-    blockhash,
-    PredicateTree::And(
-      Box::new(PredicateTree::Id(Predicate {
-        code: Code::AccountRef("/stdpred/v1".parse()?, "state_equal".into()),
-        params: vec![
-          Param::Inline(b"serialized-value-of-campaign-account-state".to_vec()),
-          Param::ProposalRef("/pgqf/spring-2023".parse()?),
-        ],
-      })),
-      Box::new(PredicateTree::Id(Predicate {
-        code: Code::AccountRef(
-          "/stdpred/v1".parse()?,
-          "predicates_equal".into(),
-        ),
-        params: vec![
-          Param::Inline(to_vec(&PredicateTree::<Exact>::Id(Predicate {
-            code: Code::AccountRef("/pgqf".parse()?, "predicate".into()),
-            params: vec![
-              Param::Inline(to_vec(&start_height)?),
-              Param::Inline(to_vec(&end_height)?),
-              Param::Inline(to_vec(&Address::new(
-                "/token/usdx/spring-2023.eth",
-              )?)?),
-              Param::Inline(to_vec(&Vec::<String>::default())?),
-            ],
-          }))?),
-          Param::ProposalRef("/pgqf/spring-2023".parse()?),
-        ],
-      })),
-    ),
+) -> anyhow::Result<Transaction> {
+  Ok(Transaction::new(
+    vec![],
+    [(
+      Address::new("/pgqf/spring-2023")?,
+      AccountChange::CreateAccount(Account {
+        state: b"serialized-value-of-campaign-account-state".to_vec(),
+        predicates: PredicateTree::Id(Predicate {
+          code: Code::AccountRef("/pgqf".parse()?, "predicate".into()),
+          params: vec![
+            Param::Inline(to_vec(&start_height)?),
+            Param::Inline(to_vec(&end_height)?),
+            Param::Inline(to_vec(&Address::new(
+              "/token/usdx/pgqf-spring-2023.eth",
+            )?)?),
+          ],
+        }),
+      }),
+    )]
+    .into(),
   ))
 }
 

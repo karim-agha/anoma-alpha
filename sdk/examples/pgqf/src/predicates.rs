@@ -16,9 +16,9 @@
 //! - /pgqf state:
 //!   - predicate bytecode
 //!   predicates:
-//!   - stdpred:immutable_state
+//!   - stdpred::immutable_state
 //!   AND
-//!   - stdpred:immutable_predicates
+//!   - stdpred::immutable_predicates
 //!
 //! - /pgqf/<camaign-id> predicates:
 //!   - /pgqd (account-ref(self))
