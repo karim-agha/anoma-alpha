@@ -4,10 +4,10 @@ use {
       install_bytecode,
       send_and_confirm_intents,
       send_and_confirm_transaction,
+      start_network,
     },
     settings::SystemSettings,
   },
-  anoma_network as network,
   anoma_predicates_sdk::{Address, Predicate},
   anoma_primitives::{
     Account,
@@ -22,14 +22,8 @@ use {
   anoma_sdk::{BlockchainWatcher, InMemoryStateStore},
   clap::Parser,
   futures::{future::join_all, StreamExt},
-  model::{Campaign, Project},
+  model::{Campaign, Donation, Project},
   multihash::Multihash,
-  network::{
-    topic::{self, Topic},
-    Config,
-    Keypair,
-    Network,
-  },
   rand::{seq::SliceRandom, Rng},
   rmp_serde::{from_slice, to_vec},
   std::{
@@ -45,37 +39,6 @@ mod io;
 mod model;
 mod settings;
 
-// (blocks, intents) topic handles
-fn start_network(
-  settings: &SystemSettings,
-) -> anyhow::Result<(Topic, Topic, Topic)> {
-  let mut network = Network::new(
-    Config {
-      listen_addrs: settings.p2p_addrs(),
-      ..Default::default()
-    },
-    Keypair::generate_ed25519(),
-  )?;
-
-  let blocks_topic = network.join(topic::Config {
-    name: format!("/{}/blocks", settings.network_id()),
-    bootstrap: settings.peers(),
-  })?;
-
-  let intents_topic = network.join(topic::Config {
-    name: format!("/{}/intents", settings.network_id()),
-    bootstrap: settings.peers(),
-  })?;
-
-  let transactions_topic = network.join(topic::Config {
-    name: format!("/{}/transactions", settings.network_id()),
-    bootstrap: settings.peers(),
-  })?;
-
-  tokio::spawn(network.runloop());
-  Ok((blocks_topic, transactions_topic, intents_topic))
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
   tracing_subscriber::fmt::init();
@@ -83,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
   let opts = SystemSettings::parse();
   info!("Client options: {opts:?}");
 
-  let (blocks, transactions, intents) = start_network(&opts)?;
+  let (transactions, blocks, intents) = start_network(&opts)?;
   let mut blocks = blocks
     .filter_map(|bytes| ready(from_slice::<Block>(&bytes).ok()))
     .boxed();
@@ -121,6 +84,20 @@ async fn main() -> anyhow::Result<()> {
   .await?;
   info!("Standard Predicate Library installed");
 
+  info!("Installing Token Library...");
+  send_and_confirm_transaction(
+    install_bytecode(
+      "/token".parse()?,
+      include_bytes!(
+        "../../../../target/wasm32-unknown-unknown/release/examples/token.wasm"
+      ),
+    )?,
+    &transactions,
+    &mut watcher,
+  )
+  .await?;
+  info!("Token Library installed");
+
   info!("Installing PGQF predicates...");
   send_and_confirm_transaction(
     install_bytecode(
@@ -138,7 +115,7 @@ async fn main() -> anyhow::Result<()> {
 
   // create treasury wallet
   send_and_confirm_transaction(
-    create_treasury("/token/usdc/spring-2023".parse()?)?,
+    create_treasury("/token/usdc/spring-2023.eth".parse()?)?,
     &transactions,
     &mut watcher,
   )
@@ -150,7 +127,7 @@ async fn main() -> anyhow::Result<()> {
     create_campaign_transaction(
       campaign_start,
       campaign_end,
-      "/token/usdc/spring-2023".parse()?,
+      "/token/usdc/spring-2023.eth".parse()?,
     )?,
     &transactions,
     &mut watcher,
@@ -201,8 +178,9 @@ async fn main() -> anyhow::Result<()> {
   let tx = send_and_confirm_intents(
     create_matching_pool_donation_intents(
       1200,
+      "/token/usdc/big-wallet-1.eth".parse()?,
       *watcher.most_recent_block().await.hash(),
-    ),
+    )?,
     &intents,
     &mut watcher,
   )
@@ -215,12 +193,14 @@ async fn main() -> anyhow::Result<()> {
     [
       create_matching_pool_donation_intents(
         1800,
+        "/token/usdc/big-wallet-2.eth".parse()?,
         *watcher.most_recent_block().await.hash(),
-      ),
+      )?,
       create_matching_pool_donation_intents(
         1200,
+        "/token/usdc/big-wallet-3.eth".parse()?,
         *watcher.most_recent_block().await.hash(),
-      ),
+      )?,
     ]
     .into_iter()
     .flatten(),
@@ -245,15 +225,16 @@ async fn main() -> anyhow::Result<()> {
   let projects = &["project1", "project2", "project3", "project4"];
   let mut donation_amounts = HashMap::new();
 
-  for _ in 0..N {
+  for i in 0..N {
     let project = *projects.choose(&mut rand::thread_rng()).unwrap();
     let amount = rand::thread_rng().gen_range(100..10000);
     let donation_intent = create_project_donation_intent(
       project,
       amount,
+      format!("/token/usdc/little-wallet-{i}.eth").parse()?,
       *watcher.most_recent_block().await.hash(),
-    );
-    if intents.gossip(to_vec(&donation_intent).unwrap()).is_ok() {
+    )?;
+    if intents.gossip(to_vec(&donation_intent)?).is_ok() {
       info!("Donated {amount} to {project}");
       donations_intents.push(*donation_intent.hash());
 
@@ -318,7 +299,10 @@ fn create_treasury(wallet: Address) -> anyhow::Result<Transaction> {
         state: to_vec(&0u64)?, // start with zero balance
         predicates: PredicateTree::Id(Predicate {
           code: Code::AccountRef("/pgqf".parse()?, "treasury".into()),
-          params: vec![Param::AccountRef(wallet)],
+          params: vec![
+            Param::AccountRef(wallet),
+            Param::AccountRef(Address::new("/pgqf/spring-2023")?),
+          ],
         }),
       }),
     )]
@@ -363,45 +347,125 @@ fn create_campaign_transaction(
 ///
 /// The solver will have to figure out all the details of adding this project to
 /// the list of projects in the campaign account state and all other plumbing.
+///
+/// This intent also expects the creation of a new empty USDC token wallet for
+/// this project
 fn create_project_intents(
   name: &str,
   blockhash: Multihash,
 ) -> anyhow::Result<impl Iterator<Item = Intent>> {
   Ok(std::iter::once(Intent::new(
     blockhash,
-    PredicateTree::Id(Predicate {
-      code: Code::AccountRef("/stdpred".parse()?, "bytes_equal".into()),
-      params: vec![
-        Param::ProposalRef(format!("/pgqf/spring-2023/{name}").parse()?),
-        Param::Inline(to_vec(&Project::default())?),
-      ],
-    }),
+    PredicateTree::And(
+      Box::new(PredicateTree::Id(Predicate {
+        code: Code::AccountRef("/stdpred".parse()?, "bytes_equal".into()),
+        params: vec![
+          Param::ProposalRef(format!("/pgqf/spring-2023/{name}").parse()?),
+          Param::Inline(to_vec(&Project::default())?),
+        ],
+      })),
+      Box::new(PredicateTree::Id(Predicate {
+        code: Code::AccountRef("/stdpred".parse()?, "uint_equal".into()),
+        params: vec![
+          Param::ProposalRef(
+            format!("/token/usdc/project-{name}.eth").parse()?,
+          ),
+          Param::Inline(to_vec(&0u64)?),
+        ],
+      })),
+    ),
   )))
 }
 
 fn create_matching_pool_donation_intents(
-  _amount: u64,
+  amount: u64,
+  from: Address,
   blockhash: Multihash,
-) -> impl Iterator<Item = Intent> {
-  std::iter::once(Intent::new(blockhash, todo!()))
+) -> anyhow::Result<impl Iterator<Item = Intent>> {
+  Ok(std::iter::once(Intent::new(
+    blockhash,
+    PredicateTree::And(
+      Box::new(PredicateTree::Id(Predicate {
+        code: Code::AccountRef("/stdpred".parse()?, "uint_less_than_by".into()),
+        params: vec![
+          Param::AccountRef(from.clone()),
+          Param::ProposalRef(from),
+          Param::Inline(to_vec(&amount)?),
+        ],
+      })),
+      Box::new(PredicateTree::Id(Predicate {
+        code: Code::AccountRef(
+          "/stdpred".parse()?,
+          "uint_greater_than_by".into(),
+        ),
+        params: vec![
+          Param::AccountRef("/token/usdc/spring-2023.eth".parse()?),
+          Param::ProposalRef("/token/usdc/spring-2023.eth".parse()?),
+          Param::Inline(to_vec(&amount)?),
+        ],
+      })),
+    ),
+  )))
 }
 
 fn create_project_donation_intent(
-  _name: &str,
-  _amount: u64,
+  name: &str,
+  amount: u64,
+  from: Address,
   blockhash: Multihash,
-) -> Intent {
-  Intent::new(blockhash, todo!())
+) -> anyhow::Result<Intent> {
+  let donation_id = from.to_string().replace('/', "-");
+  let donation_address: Address =
+    format!("/pgqf/spring-2023/{name}/{donation_id}").parse()?;
+  let project_wallet: Address =
+    format!("/token/usdc/project-{name}.eth").parse()?;
+
+  Ok(Intent::new(
+    blockhash,
+    PredicateTree::And(
+      Box::new(PredicateTree::And(
+        Box::new(PredicateTree::Id(Predicate {
+          code: Code::AccountRef(
+            "/stdpred".parse()?,
+            "uint_greater_than_by".into(),
+          ),
+          params: vec![
+            Param::ProposalRef(project_wallet.clone()),
+            Param::AccountRef(project_wallet),
+            Param::Inline(to_vec(&amount)?),
+          ],
+        })),
+        Box::new(PredicateTree::Id(Predicate {
+          code: Code::AccountRef(
+            "/stdpred".parse()?,
+            "uint_less_than_by".into(),
+          ),
+          params: vec![
+            Param::ProposalRef(from.clone()),
+            Param::AccountRef(from),
+            Param::Inline(to_vec(&amount)?),
+          ],
+        })),
+      )),
+      Box::new(PredicateTree::Id(Predicate {
+        code: Code::AccountRef("/stdpred".parse()?, "bytes_equal".into()),
+        params: vec![
+          Param::ProposalRef(donation_address),
+          Param::Inline(to_vec(&Donation::default())?),
+        ],
+      })),
+    ),
+  ))
 }
 
 fn create_funding_redistribution_intent(
-  matching_pool_amount: u64,
-  donation_amounts: HashMap<&str, u64>,
-  blockhash: Multihash,
+  _matching_pool_amount: u64,
+  _donation_amounts: HashMap<&str, u64>,
+  _blockhash: Multihash,
 ) -> Intent {
   todo!();
 }
 
-fn verify_redistribution(tx: Transaction) -> anyhow::Result<()> {
+fn _verify_redistribution(_tx: Transaction) -> anyhow::Result<()> {
   todo!();
 }

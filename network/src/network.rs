@@ -306,9 +306,9 @@ impl Network {
     let topic = match self.topics.get_mut(&msg.topic) {
       Some(topic) => topic,
       None => {
-        // a peer is sending message on an unrecognized topic
-        // this is a protocol violation.
-        self.ban_peer(from);
+        self // A peer is sending message on an unrecognized topic. Disconnect.
+          .runloop
+          .send_command(runloop::Command::Disconnect(from, connection));
         return;
       }
     };

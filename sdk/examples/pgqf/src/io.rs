@@ -1,5 +1,11 @@
 use {
-  anoma_network::{topic, topic::Topic},
+  crate::settings::SystemSettings,
+  anoma_network::{
+    topic::{self, Topic},
+    Config,
+    Keypair,
+    Network,
+  },
   anoma_predicates_sdk::{Address, Predicate},
   anoma_primitives::{
     Account,
@@ -20,7 +26,8 @@ use {
 
 /// Gossips an intent through p2p to solvers and awaits a produced block
 /// from validators that contains a transaction with this intent.
-pub async fn send_and_confirm_intents<'s>(
+#[allow(dead_code)]
+pub async fn send_and_confirm_intents(
   intents: impl Iterator<Item = Intent>,
   intents_topic: &Topic,
   watcher: &mut BlockchainWatcher,
@@ -34,7 +41,10 @@ pub async fn send_and_confirm_intents<'s>(
       info!("sending intent {intent:?}..");
       match intents_topic.gossip(to_vec(&intent)?) {
         Ok(_) => {
-          info!("done");
+          info!(
+            "Intent {} sent",
+            bs58::encode(intent.hash().to_bytes()).into_string()
+          );
           break;
         }
         Err(topic::Error::NoConnectedPeers) => {
@@ -59,6 +69,7 @@ pub async fn send_and_confirm_intents<'s>(
 
 /// Gossips a transaction through p2p to validators and awaits a produced block
 /// containing the transaction.
+#[allow(dead_code)]
 pub async fn send_and_confirm_transaction(
   transaction: Transaction,
   transactions_topic: &Topic,
@@ -87,6 +98,7 @@ pub async fn send_and_confirm_transaction(
   Ok(watcher.await_transaction(hash).await?)
 }
 
+#[allow(dead_code)]
 pub fn install_bytecode(
   address: Address,
   bytecode: &[u8],
@@ -117,4 +129,36 @@ pub fn install_bytecode(
     )]
     .into(),
   ))
+}
+
+/// (transactions, blocks, intents) topic handles
+#[allow(dead_code)]
+pub fn start_network(
+  settings: &SystemSettings,
+) -> anyhow::Result<(Topic, Topic, Topic)> {
+  let mut network = Network::new(
+    Config {
+      listen_addrs: settings.p2p_addrs(),
+      ..Default::default()
+    },
+    Keypair::generate_ed25519(),
+  )?;
+
+  let txs_topic = network.join(topic::Config {
+    name: format!("/{}/transactions", settings.network_id()),
+    bootstrap: settings.peers(),
+  })?;
+
+  let blocks_topic = network.join(topic::Config {
+    name: format!("/{}/blocks", settings.network_id()),
+    bootstrap: settings.peers(),
+  })?;
+
+  let intents_topic = network.join(topic::Config {
+    name: format!("/{}/intents", settings.network_id()),
+    bootstrap: settings.peers(),
+  })?;
+
+  tokio::spawn(network.runloop());
+  Ok((txs_topic, blocks_topic, intents_topic))
 }

@@ -1,7 +1,7 @@
 use {
   anoma_predicates_sdk::Address,
   serde::{Deserialize, Serialize},
-  std::collections::{HashMap, HashSet},
+  std::collections::HashSet,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -15,3 +15,6 @@ pub struct Campaign {
 pub struct Project {
   pub donors: Vec<(Address, u64)>,
 }
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct Donation {}

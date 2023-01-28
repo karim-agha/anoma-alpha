@@ -13,7 +13,7 @@ services:
       context: ../../../
       dockerfile: ./sdk/examples/pgqf/Dockerfile
     environment:
-      - RUST_LOG=info
+      - RUST_LOG=info,wasmer_compiler_cranelift::translator::func_translator=error
     command: ./anoma-devnode
     networks:
       pgqf_net:
@@ -24,7 +24,7 @@ services:
       context: ../../../
       dockerfile: ./sdk/examples/pgqf/Dockerfile
     environment:
-      - RUST_LOG=info
+      - RUST_LOG=info,wasmer_compiler_cranelift::translator::func_translator=error
     command: ./pgqf-solver --peer 172.21.1.2:44668
     networks:
       pgqf_net:
@@ -38,7 +38,7 @@ services:
       context: ../../../
       dockerfile: ./sdk/examples/pgqf/Dockerfile
     environment:
-      - RUST_LOG=info
+      - RUST_LOG=info,wasmer_compiler_cranelift::translator::func_translator=error
     command: ./pgqf-client --peer 172.21.1.3:44667
     networks:
       pgqf_net:
