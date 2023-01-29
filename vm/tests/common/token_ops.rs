@@ -6,7 +6,7 @@ use {
     AccountChange,
     Address,
     Code,
-    Exact,
+    Basic,
     Intent,
     Param,
     Predicate,
@@ -47,7 +47,7 @@ pub fn mint(
 
   let mut mint_intent = Intent::new(
     recent_blockhash,
-    PredicateTree::<Exact>::And(
+    PredicateTree::<Basic>::And(
       Box::new(PredicateTree::Id(Predicate {
         // expect that the total supply is updated by the mint amount
         code: Code::AccountRef("/stdpred/v1".parse()?, "uint_equal".into()),
@@ -144,7 +144,7 @@ pub fn transfer(
 
   let mut transfer_intent = Intent::new(
     recent_blockhash,
-    PredicateTree::<Exact>::And(
+    PredicateTree::<Basic>::And(
       Box::new(PredicateTree::Id(Predicate {
         code: Code::AccountRef(
           "/stdpred/v1".parse()?,
@@ -246,7 +246,7 @@ pub fn transfer_unchecked(
 ) -> anyhow::Result<Transaction> {
   let mut transfer_intent = Intent::new(
     recent_blockhash,
-    PredicateTree::<Exact>::And(
+    PredicateTree::<Basic>::And(
       Box::new(PredicateTree::Id(Predicate {
         code: Code::AccountRef("/stdpred/v1".parse()?, "uint_equal".into()),
         params: vec![

@@ -1,5 +1,5 @@
 use {
-  crate::{Address, Calldata, Exact, ExpandedAccountChange, Repr},
+  crate::{Address, Calldata, Basic, ExpandedAccountChange, Repr},
   alloc::{
     boxed::Box,
     collections::BTreeMap,
@@ -104,7 +104,7 @@ impl core::fmt::Debug for ExpandedCode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct Predicate<R: Repr = Exact> {
+pub struct Predicate<R: Repr = Basic> {
   pub code: R::Code,
   pub params: Vec<R::Param>,
 }
@@ -117,7 +117,7 @@ pub enum ExpressionTree<T> {
   Or(Box<ExpressionTree<T>>, Box<ExpressionTree<T>>),
 }
 
-pub type PredicateTree<T = Exact> = ExpressionTree<Predicate<T>>;
+pub type PredicateTree<T = Basic> = ExpressionTree<Predicate<T>>;
 
 impl<T> ExpressionTree<T> {
   /// Applies a function to all predicates in the tree and returns a new
@@ -226,7 +226,7 @@ pub struct PredicateContext {
 mod tests {
   use crate::{
     Code,
-    Exact,
+    Basic,
     Expanded,
     ExpandedCode,
     ExpandedParam,
@@ -238,7 +238,7 @@ mod tests {
   #[test]
   fn predicate_tree_map() {
     let intput_tree =
-      PredicateTree::<Exact>::Not(Box::new(PredicateTree::And(
+      PredicateTree::<Basic>::Not(Box::new(PredicateTree::And(
         Box::new(PredicateTree::Or(
           Box::new(PredicateTree::Id(Predicate {
             code: Code::Inline(b"code-1".to_vec()),

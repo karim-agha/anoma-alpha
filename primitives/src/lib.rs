@@ -47,8 +47,8 @@ impl Repr for Expanded {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct Exact;
-impl Repr for Exact {
+pub struct Basic;
+impl Repr for Basic {
   type AccountChange = AccountChange;
   type Code = Code;
   type Param = Param;

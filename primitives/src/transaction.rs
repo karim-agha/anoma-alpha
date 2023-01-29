@@ -1,5 +1,5 @@
 use {
-  crate::{Account, Address, Exact, Intent, PredicateTree, Repr},
+  crate::{Account, Address, Basic, Intent, PredicateTree, Repr},
   alloc::{collections::BTreeMap, vec::Vec},
   core::fmt::Debug,
   multihash::{Hasher, Multihash, MultihashDigest, Sha3_256},
@@ -11,7 +11,7 @@ use {
 pub enum AccountChange {
   CreateAccount(Account),
   ReplaceState(Vec<u8>),
-  ReplacePredicates(PredicateTree<Exact>),
+  ReplacePredicates(PredicateTree<Basic>),
   DeleteAccount,
 }
 
@@ -23,8 +23,8 @@ pub enum ExpandedAccountChange {
     proposed: Vec<u8>,
   },
   ReplacePredicates {
-    current: PredicateTree<Exact>,
-    proposed: PredicateTree<Exact>,
+    current: PredicateTree<Basic>,
+    proposed: PredicateTree<Basic>,
   },
   DeleteAccount {
     current: Account,
@@ -32,7 +32,7 @@ pub enum ExpandedAccountChange {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Transaction<R: Repr = Exact> {
+pub struct Transaction<R: Repr = Basic> {
   /// The intents that this transaction is trying to satisfy.
   ///
   /// Intents also carry authorizations to modify an account in

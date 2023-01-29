@@ -1,5 +1,5 @@
 use {
-  crate::{b58::ToBase58String, Exact, PredicateTree, Repr},
+  crate::{b58::ToBase58String, Basic, PredicateTree, Repr},
   alloc::{collections::BTreeMap, string::String, vec::Vec},
   core::fmt::Debug,
   multihash::{Hasher, Multihash, MultihashDigest, Sha3_256},
@@ -15,7 +15,7 @@ pub type Calldata = BTreeMap<String, Vec<u8>>;
 /// Intents are partial transactions created by users describing what state
 /// transition they want to achieve.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct Intent<R: Repr = Exact> {
+pub struct Intent<R: Repr = Basic> {
   /// Hash of a block within the last 2 epochs.
   /// Intents that have this value pointing to a
   /// block that is older then 2 epochs are expired
