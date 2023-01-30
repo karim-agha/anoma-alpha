@@ -347,5 +347,42 @@ mod tests {
 
     let result = pred.matches(pattern);
     assert!(result.is_none());
+
+    let pred = PredicateTree::And(
+      Box::new(PredicateTree::<Basic>::Id(Predicate {
+        code: Code::AccountRef("/stdpred".parse().unwrap(), "pred1".into()),
+        params: vec![
+          Param::AccountRef("/address1".parse().unwrap()),
+          Param::Inline(b"someval".to_vec()),
+        ],
+      })),
+      Box::new(PredicateTree::<Basic>::Id(Predicate {
+        code: Code::AccountRef("/stdpred".parse().unwrap(), "pred2".into()),
+        params: vec![
+          Param::AccountRef("/address2".parse().unwrap()),
+          Param::Inline(b"someval2".to_vec()),
+        ],
+      })),
+    );
+
+    let pattern = PredicateTree::Or(
+      Box::new(PredicateTree::<Query>::Id(Predicate {
+        code: Code::AccountRef("/stdpred".parse().unwrap(), "pred1".into()),
+        params: vec![
+          ParamPattern::AccountRef("param1".into()),
+          ParamPattern::Any,
+        ],
+      })),
+      Box::new(PredicateTree::<Query>::Id(Predicate {
+        code: Code::AccountRef("/stdpred".parse().unwrap(), "pred2".into()),
+        params: vec![
+          ParamPattern::AccountRef("param3".into()),
+          ParamPattern::Inline("param4".into()),
+        ],
+      })),
+    );
+
+    let result = pred.matches(pattern);
+    assert!(result.is_none());
   }
 }
