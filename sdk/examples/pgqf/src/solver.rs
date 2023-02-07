@@ -62,7 +62,7 @@ async fn main() -> anyhow::Result<()> {
   }
 }
 
-fn try_match_and_fill_intent(intent: Intent, txtopic: &Topic) {
+fn try_match_and_fill_intent(intent: Intent, _txtopic: &Topic) {
   let expression = &intent.expectations;
 
   if let Some(_matches) = expression.matches(create_project_intent_pattern()) {

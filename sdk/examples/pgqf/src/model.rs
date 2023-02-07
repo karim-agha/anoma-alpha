@@ -1,20 +1,19 @@
 use {
   anoma_predicates_sdk::Address,
   serde::{Deserialize, Serialize},
-  std::collections::HashSet,
+  std::collections::BTreeSet,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Campaign {
   pub starts_at: u64,
   pub ends_at: u64,
-  pub projects: HashSet<String>,
+  pub projects: BTreeSet<String>,
 }
 
+#[repr(transparent)]
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct Project {
-  pub donors: Vec<(Address, u64)>,
-}
+pub struct Project(pub BTreeSet<Address>);
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Donation {}

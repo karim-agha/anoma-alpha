@@ -320,23 +320,40 @@ fn create_campaign_transaction(
 ) -> anyhow::Result<Transaction> {
   Ok(Transaction::new(
     vec![], // no intents
-    [(
-      Address::new("/pgqf/spring-2023")?,
-      AccountChange::CreateAccount(Account {
-        state: to_vec(&Campaign {
-          starts_at: start_height,
-          ends_at: end_height,
-          projects: Default::default(), // start with 0 projects
-        })?,
-        predicates: PredicateTree::Id(Predicate {
-          code: Code::AccountRef("/pgqf".parse()?, "campaign".into()),
-          params: vec![
-            Param::AccountRef("/pgqf/spring-2023".parse()?),
-            Param::AccountRef(treasury),
-          ],
+    [
+      (
+        // create the campaign account
+        Address::new("/pgqf/spring-2023")?,
+        AccountChange::CreateAccount(Account {
+          state: to_vec(&Campaign {
+            starts_at: start_height,
+            ends_at: end_height,
+            projects: Default::default(), // start with 0 projects
+          })?,
+          predicates: PredicateTree::Id(Predicate {
+            code: Code::AccountRef("/pgqf".parse()?, "campaign".into()),
+            params: vec![
+              Param::AccountRef("/pgqf/spring-2023".parse()?),
+              Param::AccountRef(treasury),
+            ],
+          }),
         }),
-      }),
-    )]
+      ),
+      (
+        // also create campaign treasury
+        Address::new("/token/usdx/sprint-2023-treasury")?,
+        AccountChange::CreateAccount(Account {
+          state: to_vec(&0u64)?, // zero balance
+          predicates: PredicateTree::Id(Predicate {
+            code: Code::AccountRef("/pgqf".parse()?, "treasury".into()),
+            params: vec![
+              Param::AccountRef("/pgqf/spring-2023".parse()?),
+              Param::AccountRef("/token/usdc".parse()?), // funding currency
+            ],
+          }),
+        }),
+      ),
+    ]
     .into(),
   ))
 }
@@ -348,8 +365,9 @@ fn create_campaign_transaction(
 /// The solver will have to figure out all the details of adding this project to
 /// the list of projects in the campaign account state and all other plumbing.
 ///
-/// This intent also expects the creation of a new empty USDC token wallet for
-/// this project
+/// The intent expects that at /pgqf/<camaign>/<project-id> there will be
+/// an account created that is an empty map. The map will contain later on
+/// a collection of donations identified by donor wallet address.
 fn create_project_intents(
   name: &str,
   blockhash: Multihash,
@@ -357,19 +375,21 @@ fn create_project_intents(
   Ok(std::iter::once(Intent::new(
     blockhash,
     PredicateTree::And(
+      // this intent expects a new account to be created for this project
+      // with an empty map of donations,
       Box::new(PredicateTree::Id(Predicate {
-        code: Code::AccountRef("/stdpred".parse()?, "bytes_equal".into()),
-        params: vec![
-          Param::ProposalRef(format!("/pgqf/spring-2023/{name}").parse()?),
-          Param::Inline(to_vec(&Project::default())?),
-        ],
+        code: Code::AccountRef("/stdpred".parse()?, "is_map_empty".into()),
+        params: vec![Param::ProposalRef(
+          format!("/pgqf/spring-2023/{name}").parse()?,
+        )],
       })),
+      // it also expects the existing list of projects to include the
+      // newly added project in the top-level campaign account projects map.
       Box::new(PredicateTree::Id(Predicate {
-        code: Code::AccountRef("/stdpred".parse()?, "uint_equal".into()),
+        code: Code::AccountRef("/stdpred".parse()?, "key_equals".into()),
         params: vec![
-          Param::ProposalRef(
-            format!("/token/usdc/project-{name}.eth").parse()?,
-          ),
+          Param::ProposalRef("/pgqf/spring-2023".parse()?),
+          Param::Inline(to_vec(name)?),
           Param::Inline(to_vec(&0u64)?),
         ],
       })),
