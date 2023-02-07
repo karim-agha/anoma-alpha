@@ -3,7 +3,6 @@ use {
   anoma_network::{
     topic::{self, Topic},
     Config,
-    Keypair,
     Network,
   },
   anoma_predicates_sdk::{Address, Predicate},
@@ -141,7 +140,7 @@ pub fn start_network(
       listen_addrs: settings.p2p_addrs(),
       ..Default::default()
     },
-    Keypair::generate_ed25519(),
+    anoma_network::Keypair::generate_ed25519(),
   )?;
 
   let txs_topic = network.join(topic::Config {

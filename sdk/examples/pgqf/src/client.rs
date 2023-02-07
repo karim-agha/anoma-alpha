@@ -8,6 +8,7 @@ use {
     },
     settings::SystemSettings,
   },
+  anoma_network::topic::Topic,
   anoma_predicates_sdk::{Address, Predicate},
   anoma_primitives::{
     Account,
@@ -21,8 +22,9 @@ use {
   },
   anoma_sdk::{BlockchainWatcher, InMemoryStateStore},
   clap::Parser,
+  ed25519_dalek::{Keypair, Signer},
   futures::{future::join_all, StreamExt},
-  model::{Campaign, Donation, Project},
+  model::{Campaign, Donation},
   multihash::Multihash,
   rand::{seq::SliceRandom, Rng},
   rmp_serde::{from_slice, to_vec},
@@ -84,19 +86,15 @@ async fn main() -> anyhow::Result<()> {
   .await?;
   info!("Standard Predicate Library installed");
 
-  info!("Installing Token Library...");
-  send_and_confirm_transaction(
-    install_bytecode(
-      "/token".parse()?,
-      include_bytes!(
-        "../../../../target/wasm32-unknown-unknown/release/examples/token.wasm"
-      ),
-    )?,
-    &transactions,
-    &mut watcher,
-  )
-  .await?;
-  info!("Token Library installed");
+  let (wallets, addresses): (Vec<_>, Vec<_>) =
+    prepare_wallets_and_token_program(10, &transactions, &mut watcher)
+      .await?
+      .into_iter()
+      .unzip();
+
+  info!(
+    "Generated the following wallets with 10k tokens in each: {addresses:?}"
+  );
 
   info!("Installing PGQF predicates...");
   send_and_confirm_transaction(
@@ -114,8 +112,9 @@ async fn main() -> anyhow::Result<()> {
   info!("PGQF predicates installed",);
 
   // create treasury wallet
+  let treasury_address: Address = "/token/usdc/spring-2023.eth".parse()?;
   send_and_confirm_transaction(
-    create_treasury("/token/usdc/spring-2023.eth".parse()?)?,
+    create_treasury(treasury_address.clone())?,
     &transactions,
     &mut watcher,
   )
@@ -128,6 +127,7 @@ async fn main() -> anyhow::Result<()> {
       campaign_start,
       campaign_end,
       "/token/usdc/spring-2023.eth".parse()?,
+      *watcher.most_recent_block().await.hash(),
     )?,
     &transactions,
     &mut watcher,
@@ -176,9 +176,10 @@ async fn main() -> anyhow::Result<()> {
 
   // first donation to the matching pool
   let tx = send_and_confirm_intents(
-    create_matching_pool_donation_intents(
+    create_donation_to_matching_pool_intents(
       1200,
-      "/token/usdc/big-wallet-1.eth".parse()?,
+      &wallets[0],
+      treasury_address.clone(),
       *watcher.most_recent_block().await.hash(),
     )?,
     &intents,
@@ -191,14 +192,16 @@ async fn main() -> anyhow::Result<()> {
   // second batch of donations to the matching pool
   let tx = send_and_confirm_intents(
     [
-      create_matching_pool_donation_intents(
+      create_donation_to_matching_pool_intents(
         1800,
-        "/token/usdc/big-wallet-2.eth".parse()?,
+        &wallets[1],
+        treasury_address.clone(),
         *watcher.most_recent_block().await.hash(),
       )?,
-      create_matching_pool_donation_intents(
+      create_donation_to_matching_pool_intents(
         1200,
-        "/token/usdc/big-wallet-3.eth".parse()?,
+        &wallets[2],
+        treasury_address.clone(),
         *watcher.most_recent_block().await.hash(),
       )?,
     ]
@@ -227,7 +230,7 @@ async fn main() -> anyhow::Result<()> {
 
   for i in 0..N {
     let project = *projects.choose(&mut rand::thread_rng()).unwrap();
-    let amount = rand::thread_rng().gen_range(100..10000);
+    let amount = rand::thread_rng().gen_range(10, 100);
     let donation_intent = create_project_donation_intent(
       project,
       amount,
@@ -246,7 +249,7 @@ async fn main() -> anyhow::Result<()> {
 
     // random delay
     tokio::time::sleep(Duration::from_millis(
-      rand::thread_rng().gen_range(100..1500),
+      rand::thread_rng().gen_range(100, 1500),
     ))
     .await;
   }
@@ -317,43 +320,39 @@ fn create_campaign_transaction(
   start_height: u64,
   end_height: u64,
   treasury: Address,
+  blockhash: Multihash,
 ) -> anyhow::Result<Transaction> {
   Ok(Transaction::new(
-    vec![], // no intents
-    [
-      (
-        // create the campaign account
-        Address::new("/pgqf/spring-2023")?,
-        AccountChange::CreateAccount(Account {
-          state: to_vec(&Campaign {
-            starts_at: start_height,
-            ends_at: end_height,
-            projects: Default::default(), // start with 0 projects
-          })?,
-          predicates: PredicateTree::Id(Predicate {
-            code: Code::AccountRef("/pgqf".parse()?, "campaign".into()),
-            params: vec![
-              Param::AccountRef("/pgqf/spring-2023".parse()?),
-              Param::AccountRef(treasury),
-            ],
-          }),
+    // expect that for this campaign there is already a treasury token account
+    // created.
+    vec![Intent::new(
+      blockhash,
+      PredicateTree::Id(Predicate {
+        code: Code::AccountRef("/stdpred".parse()?, "uint_equal".into()),
+        params: vec![
+          Param::AccountRef(treasury.clone()),
+          Param::Inline(to_vec(&0u64)?),
+        ],
+      }),
+    )],
+    [(
+      // create the campaign account
+      Address::new("/pgqf/spring-2023")?,
+      AccountChange::CreateAccount(Account {
+        state: to_vec(&Campaign {
+          starts_at: start_height,
+          ends_at: end_height,
+          projects: Default::default(), // start with 0 projects
+        })?,
+        predicates: PredicateTree::Id(Predicate {
+          code: Code::AccountRef("/pgqf".parse()?, "campaign".into()),
+          params: vec![
+            Param::AccountRef("/pgqf/spring-2023".parse()?),
+            Param::AccountRef(treasury),
+          ],
         }),
-      ),
-      (
-        // also create campaign treasury
-        Address::new("/token/usdx/sprint-2023-treasury")?,
-        AccountChange::CreateAccount(Account {
-          state: to_vec(&0u64)?, // zero balance
-          predicates: PredicateTree::Id(Predicate {
-            code: Code::AccountRef("/pgqf".parse()?, "treasury".into()),
-            params: vec![
-              Param::AccountRef("/pgqf/spring-2023".parse()?),
-              Param::AccountRef("/token/usdc".parse()?), // funding currency
-            ],
-          }),
-        }),
-      ),
-    ]
+      }),
+    )]
     .into(),
   ))
 }
@@ -397,19 +396,29 @@ fn create_project_intents(
   )))
 }
 
-fn create_matching_pool_donation_intents(
+/// Transfers funds from a sender to the treasury without allocating
+/// the amount to any particular project. This way those funds become
+/// part of the matching pool.
+fn create_donation_to_matching_pool_intents(
   amount: u64,
-  from: Address,
+  from: &Keypair,
+  treasury: Address,
   blockhash: Multihash,
 ) -> anyhow::Result<impl Iterator<Item = Intent>> {
-  Ok(std::iter::once(Intent::new(
+  let from_addr: Address = format!(
+    "/token/usdc/{}",
+    bs58::encode(&from.public.to_bytes()).into_string()
+  )
+  .parse()?;
+
+  let mut intent = Intent::new(
     blockhash,
     PredicateTree::And(
       Box::new(PredicateTree::Id(Predicate {
         code: Code::AccountRef("/stdpred".parse()?, "uint_less_than_by".into()),
         params: vec![
-          Param::AccountRef(from.clone()),
-          Param::ProposalRef(from),
+          Param::AccountRef(from_addr.clone()),
+          Param::ProposalRef(from_addr),
           Param::Inline(to_vec(&amount)?),
         ],
       })),
@@ -419,13 +428,25 @@ fn create_matching_pool_donation_intents(
           "uint_greater_than_by".into(),
         ),
         params: vec![
-          Param::AccountRef("/token/usdc/spring-2023.eth".parse()?),
-          Param::ProposalRef("/token/usdc/spring-2023.eth".parse()?),
+          Param::AccountRef(treasury.clone()),
+          Param::ProposalRef(treasury),
           Param::Inline(to_vec(&amount)?),
         ],
       })),
     ),
-  )))
+  );
+
+  // sign the intent with the donor private key
+  // for the payment to be authorized by the token predicates
+  intent.calldata.insert(
+    bs58::encode(&from.public.to_bytes()).into_string(),
+    from
+      .sign(intent.signing_hash().to_bytes().as_slice())
+      .to_bytes()
+      .to_vec(),
+  );
+
+  Ok(std::iter::once(intent))
 }
 
 fn create_project_donation_intent(
@@ -488,4 +509,155 @@ fn create_funding_redistribution_intent(
 
 fn _verify_redistribution(_tx: Transaction) -> anyhow::Result<()> {
   todo!();
+}
+
+/// This function installs the Token program and creates a token called "USDC".
+/// It also generates a given number of wallets and preloads each of them with
+/// 10k tokens. It configures token balance addresses with realistic predicates
+/// that require signatures on spending.
+///
+/// Those are supposed to be wallets owned by users. Donations are sent from
+/// those wallets. Rules of the treasury spending predicates do not apply on
+/// them.
+#[allow(dead_code)]
+pub async fn prepare_wallets_and_token_program(
+  count: usize,
+  transactions_topic: &Topic,
+  watcher: &mut BlockchainWatcher,
+) -> anyhow::Result<Vec<(Keypair, Address)>> {
+  // generate as many wallets as the caller wants
+  let wallets: Vec<_> = (0..count)
+    .map(|_| Keypair::generate(&mut rand::thread_rng()))
+    .collect();
+
+  // for each keypair, generate its token wallet address.
+  let wallet_addresses: Vec<_> = wallets
+    .iter()
+    .map(|w| {
+      Address::new(format!(
+        "/token/usdc/{}",
+        bs58::encode(&w.public.to_bytes()).into_string()
+      ))
+      .expect("should never fail. validated at compile time")
+    })
+    .collect();
+
+  let wallets: Vec<_> = wallets
+    .into_iter()
+    .zip(wallet_addresses.into_iter())
+    .collect();
+
+  // Create a transaction that will create all those wallets on
+  // chain in the global state, with realistic spending scenarios
+  // e.g. validating signatures on spending, etc.
+
+  // Here we're doing a simple trick by first creating the wallet balance
+  // accounts and THEN installing the global token predicate, to avoid
+  // having to go through the whole mint/transfer scenario that is already
+  // tested in VM tests.
+  // For each wallet we create an account prefunded with 10k.
+  let tx = Transaction::new(
+    vec![],
+    wallets
+      .iter()
+      .map(|(kp, addr)| {
+        (
+          addr.clone(),
+          AccountChange::CreateAccount(Account {
+            state: to_vec(&10000u64).expect("valid at compile time"),
+            predicates: PredicateTree::Or(
+              Box::new(PredicateTree::Id(Predicate {
+                code: Code::AccountRef(
+                  "/stdpred".parse().expect("valid at compile time"),
+                  "uint_greater_than_equal".into(),
+                ),
+                params: vec![
+                  Param::ProposalRef(addr.clone()),
+                  Param::AccountRef(addr.clone()),
+                ],
+              })),
+              Box::new(PredicateTree::Id(Predicate {
+                code: Code::AccountRef(
+                  "/stdpred".parse().expect("valid at compile time"),
+                  "require_ed25519_signature".into(),
+                ),
+                params: vec![Param::Inline(kp.public.to_bytes().to_vec())],
+              })),
+            ),
+          }),
+        )
+      })
+      .collect(),
+  );
+
+  send_and_confirm_transaction(tx, transactions_topic, watcher).await?;
+
+  // now create a fake USDC token with the correct total supply
+  let total_supply = count as u64 * 10000u64;
+  let mint_keypair = Keypair::generate(&mut rand::thread_rng());
+  let token_address = Address::new("/token/usdx").unwrap();
+  send_and_confirm_transaction(
+    Transaction::new(
+      vec![],
+      [(
+        token_address.clone(),
+        AccountChange::CreateAccount(Account {
+          state: to_vec(&total_supply)?,
+          predicates: PredicateTree::And(
+            Box::new(PredicateTree::Id(Predicate {
+              // token contract predicate
+              code: Code::AccountRef(
+                "/token".parse().unwrap(),
+                "predicate".into(),
+              ),
+              params: vec![
+                // input params as per documentation:
+
+                // self address, used to identity child wallet balances
+                // accounts
+                Param::Inline(to_vec(&token_address).unwrap()),
+                // mint authority, signature to authorize minting and burning
+                // tokens
+                Param::Inline(to_vec(&mint_keypair.public.as_bytes()).unwrap()),
+                // reference to an account where the total supply value is
+                // stored. we're going to store it in the
+                // top-level account itself
+                Param::AccountRef(token_address.clone()),
+              ],
+            })),
+            Box::new(PredicateTree::Id(Predicate {
+              code: Code::AccountRef(
+                "/stdpred".parse().unwrap(),
+                "constant".into(),
+              ),
+              params: vec![Param::Inline(to_vec(&false).unwrap())],
+            })),
+          ),
+        }),
+      )]
+      .into(),
+    ),
+    transactions_topic,
+    watcher,
+  )
+  .await?;
+
+  // now we're ready to install the token bytecode and start applying regular
+  // token rules
+
+  info!("Installing Token Library...");
+  send_and_confirm_transaction(
+    install_bytecode(
+      "/token".parse()?,
+      include_bytes!(
+        "../../../../target/wasm32-unknown-unknown/release/examples/token.wasm"
+      ),
+    )?,
+    transactions_topic,
+    watcher,
+  )
+  .await?;
+  info!("Token Library installed");
+
+  Ok(wallets)
 }

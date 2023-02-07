@@ -30,7 +30,6 @@ fn contains_key(params: &Vec<ExpandedParam>, _: &PredicateContext) -> bool {
   map.contains_key(needle)
 }
 
-
 #[predicate]
 fn key_equals(params: &Vec<ExpandedParam>, _: &PredicateContext) -> bool {
   assert_eq!(params.len(), 2);

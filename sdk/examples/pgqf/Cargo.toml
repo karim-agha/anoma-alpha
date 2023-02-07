@@ -25,7 +25,8 @@ tracing-subscriber = { version = "0.3", features = [
   "env-filter",
 ], optional = true }
 futures = { version = "0.3", optional = true }
-rand = { version = "0.8.5", optional = true }
+rand = { version = "0.7", optional = true }
+ed25519-dalek = { version = "1.0.1", optional = true }
 
 [features]
 node = [
@@ -40,7 +41,8 @@ node = [
   "futures",
   "multihash",
   "anoma-network",
-  "anoma-sdk"
+  "anoma-sdk",
+  "ed25519-dalek",
 ]
 
 [[bin]]
